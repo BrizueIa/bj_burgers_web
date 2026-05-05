@@ -255,6 +255,31 @@
         filter: drop-shadow(0 0 35px rgba(255, 170, 0, 1));
       }
 
+      .promo-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding: 0.85rem 1.5rem;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 215, 0, 0.45);
+        background: rgba(255, 215, 0, 0.08);
+        color: var(--gold);
+        font-family: "Oswald", sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-decoration: none;
+        transition:
+          transform 0.25s,
+          border-color 0.25s,
+          background 0.25s;
+      }
+      .promo-link:hover {
+        transform: translateY(-2px);
+        border-color: rgba(255, 215, 0, 0.8);
+        background: rgba(255, 215, 0, 0.14);
+      }
+
       .scroll-hint {
         position: absolute;
         bottom: 2rem;
@@ -663,6 +688,7 @@
           PEDIR POR WHATSAPP
         </a>
         <a class="phone-number">📱 833 351 4381</a>
+        <a href="./ruleta/" class="promo-link">RULETA DE REGALOS</a>
       </div>
       <div class="scroll-hint">
         <span>VER MENÚ</span>
