@@ -255,6 +255,8 @@
       canvas#wheel {
         display: block;
         border-radius: 50%;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
         box-shadow:
           0 0 0 7px #740000,
           0 0 0 13px #ffd700,
@@ -956,24 +958,38 @@
       const ctx = refs.wheel.getContext("2d");
 
       function initWheel() {
-        const size = Math.min(
+        const cssSize = Math.min(
           480,
           window.innerWidth * 0.82,
           window.innerHeight * 0.52,
         );
 
-        refs.wheel.width = size;
-        refs.wheel.height = size;
+        const dpr = window.devicePixelRatio || 1;
+
+        /* tamaño visual */
+        refs.wheel.style.width = cssSize + "px";
+        refs.wheel.style.height = cssSize + "px";
+
+        /* tamaño real interno (más resolución) */
+        refs.wheel.width = cssSize * dpr;
+        refs.wheel.height = cssSize * dpr;
+
+        /* reset transform antes de escalar */
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.scale(dpr, dpr);
+
         drawWheel(curRot);
       }
 
       function drawWheel(rot) {
-        const W = refs.wheel.width;
+        const W = parseFloat(refs.wheel.style.width);
+        const H = parseFloat(refs.wheel.style.height);
+
         const cx = W / 2;
-        const cy = W / 2;
+        const cy = H / 2;
         const R = W / 2 - 8; // menos pegado al borde
 
-        ctx.clearRect(0, 0, W, W);
+        ctx.clearRect(0, 0, W, H);
 
         // aro exterior dorado
         ctx.beginPath();
