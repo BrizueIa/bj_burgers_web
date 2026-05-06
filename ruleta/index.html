@@ -1279,6 +1279,13 @@
         refs.statusBox.textContent = message;
       }
 
+      function scrollToWheelOnMobile() {
+        if (window.innerWidth > 768) return;
+        const wheelPanel = document.querySelector(".wheel-panel");
+        if (!wheelPanel) return;
+        wheelPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
       function updateSummary() {
         if (!state.codeRecord) {
           refs.summaryBox.className = "summary-box";
