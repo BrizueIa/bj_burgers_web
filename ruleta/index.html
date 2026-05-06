@@ -703,6 +703,7 @@
           <button class="spin-btn" id="spin-btn" type="button" disabled>
             GIRAR RULETA
           </button>
+          <div class="result-box" id="result-box"></div>
           <p class="footnote">Premios sujetos a disponibilidad.</p>
         </section>
       </div>
@@ -1516,11 +1517,13 @@
             }
             stopSpinSound();
 
-            refs.resultBox.innerHTML = `
-              <strong>Resultado del giro</strong><br/>
-              <span class="result-prize">${prize.label}</span><br />
-              Te quedan <strong>${state.codeRecord.remaining_spins}</strong> giro(s) disponibles.
-            `;
+            if (refs.resultBox) {
+              refs.resultBox.innerHTML = `
+                <strong>Resultado del giro</strong><br/>
+                <span class="result-prize">${prize.label}</span><br />
+                Te quedan <strong>${state.codeRecord.remaining_spins}</strong> giro(s) disponibles.
+              `;
+            }
             setStatus(
               state.codeRecord.remaining_spins > 0
                 ? "Giro aplicado correctamente. Si aun tienes saldo, puedes volver a girar."
