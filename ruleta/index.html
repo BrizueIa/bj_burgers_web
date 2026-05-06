@@ -1309,6 +1309,52 @@
         return data;
       }
 
+      async function consumeAllSpins(record) {
+        const currentRemaining = Number(record.remaining_spins || 0);
+        const { data, error } = await supabaseClient
+          .from(SUPABASE_TABLE)
+          .update({ remaining_spins: 0 })
+          .eq("id", record.id)
+          .eq("remaining_spins", currentRemaining)
+          .select("id, code, remaining_spins, is_active")
+          .maybeSingle();
+        if (error) throw error;
+        return data;
+      }
+
+      const SPIN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+      function getSpinCacheKey(code) {
+        return `bj_ruleta_cache_${code}`;
+      }
+
+      function loadSpinCache(code) {
+        const raw = localStorage.getItem(getSpinCacheKey(code));
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed.spins !== "number") return null;
+          if (Date.now() - parsed.ts > SPIN_CACHE_TTL_MS) {
+            localStorage.removeItem(getSpinCacheKey(code));
+            return null;
+          }
+          return parsed;
+        } catch {
+          localStorage.removeItem(getSpinCacheKey(code));
+          return null;
+        }
+      }
+
+      function saveSpinCache(code, spins) {
+        localStorage.setItem(
+          getSpinCacheKey(code),
+          JSON.stringify({ spins, ts: Date.now() }),
+        );
+      }
+
+      function clearSpinCache(code) {
+        localStorage.removeItem(getSpinCacheKey(code));
+      }
+
       async function consumeSpin() {
         const currentRemaining = Number(state.codeRecord.remaining_spins || 0);
         const { data, error } = await supabaseClient
@@ -1348,16 +1394,35 @@
       ════════════════════════════════════════════════ */
       refs.codeForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        const code = refs.codeInput.value.trim().toUpperCase();
+        if (!code) {
+          setStatus("Ingresa un codigo valido.", "error");
+          return;
+        }
+
+        const cached = loadSpinCache(code);
+        if (cached && cached.spins > 0) {
+          state.codeRecord = {
+            id: null,
+            code,
+            remaining_spins: cached.spins,
+            is_active: true,
+            isCached: true,
+          };
+          updateSummary();
+          setStatus(
+            "Codigo con giros activos en este dispositivo. Ya puedes girar.",
+            "ok",
+          );
+          scrollToWheelOnMobile();
+          return;
+        }
+
         if (!supabaseReady) {
           setStatus(
             "Falta configurar Supabase en este archivo antes de validar codigos.",
             "error",
           );
-          return;
-        }
-        const code = refs.codeInput.value.trim().toUpperCase();
-        if (!code) {
-          setStatus("Ingresa un codigo valido.", "error");
           return;
         }
 
@@ -1374,14 +1439,19 @@
             return;
           }
           if (Number(record.remaining_spins || 0) < 1) {
-            state.codeRecord = record;
-            updateSummary();
             setStatus("Este codigo ya no tiene giros disponibles.", "error");
             return;
           }
-          state.codeRecord = record;
+          await consumeAllSpins(record);
+          saveSpinCache(code, Number(record.remaining_spins || 0));
+          state.codeRecord = {
+            ...record,
+            remaining_spins: Number(record.remaining_spins || 0),
+            isCached: true,
+          };
           updateSummary();
-          setStatus("Codigo valido. Ya puedes girar la ruleta.", "ok");
+          setStatus("Codigo valido. Giros canjeados en este dispositivo.", "ok");
+          scrollToWheelOnMobile();
         } catch (error) {
           setStatus(`No se pudo validar el codigo: ${error.message}`, "error");
         } finally {
@@ -1404,20 +1474,29 @@
         setStatus("Descontando un giro y preparando la ruleta...", null);
 
         try {
-          const updatedRecord = await consumeSpin();
-          if (!updatedRecord) {
-            state.isSpinning = false;
-            refs.validateBtn.disabled = false;
-            stopSpinSound();
-            state.codeRecord = await validateCode(state.codeRecord.code);
-            updateSummary();
-            setStatus(
-              "No fue posible consumir el giro. El codigo pudo cambiar en otra sesion.",
-              "error",
-            );
-            return;
+          if (state.codeRecord.isCached) {
+            state.codeRecord.remaining_spins -= 1;
+            if (state.codeRecord.remaining_spins > 0) {
+              saveSpinCache(state.codeRecord.code, state.codeRecord.remaining_spins);
+            } else {
+              clearSpinCache(state.codeRecord.code);
+            }
+          } else {
+            const updatedRecord = await consumeSpin();
+            if (!updatedRecord) {
+              state.isSpinning = false;
+              refs.validateBtn.disabled = false;
+              stopSpinSound();
+              state.codeRecord = await validateCode(state.codeRecord.code);
+              updateSummary();
+              setStatus(
+                "No fue posible consumir el giro. El codigo pudo cambiar en otra sesion.",
+                "error",
+              );
+              return;
+            }
+            state.codeRecord = updatedRecord;
           }
-          state.codeRecord = updatedRecord;
           updateSummary();
 
           const prize = pickPrize();
