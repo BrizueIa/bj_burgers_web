@@ -1136,6 +1136,7 @@
          LÓGICA SUPABASE — sin cambios
       ════════════════════════════════════════════════ */
       function setStatus(message, tone) {
+        if (!refs.statusBox) return;
         refs.statusBox.className = "status-box";
         if (tone === "ok") refs.statusBox.classList.add("ok");
         if (tone === "error") refs.statusBox.classList.add("error");
@@ -1313,6 +1314,7 @@
          INICIALIZACIÓN
       ════════════════════════════════════════════════ */
       function updateConfigBox() {
+        if (!refs.configBox) return;
         refs.configBox.style.display = supabaseReady ? "none" : "block";
       }
 
