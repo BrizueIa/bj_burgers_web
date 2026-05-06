@@ -952,6 +952,119 @@
         : null;
 
       /* ════════════════════════════════════════════════
+         SONIDOS (Web Audio API)
+      ════════════════════════════════════════════════ */
+      let audioCtx;
+      function getAudioCtx() {
+        if (!window.AudioContext && !window.webkitAudioContext) return null;
+        if (!audioCtx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          audioCtx = new Ctx();
+        }
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        return audioCtx;
+      }
+
+      let spinTickTimer = null;
+      let spinTickStopper = null;
+
+      function playSpinTick(ctx, tone) {
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "square";
+        osc.frequency.setValueAtTime(tone, now);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.3, now + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.07);
+      }
+
+      function startSpinSound() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        stopSpinSound();
+
+        let rateMs = 70;
+        let tone = 720;
+        spinTickTimer = setInterval(() => {
+          playSpinTick(ctx, tone);
+          rateMs = Math.min(220, rateMs + 6);
+          tone = Math.max(320, tone - 10);
+        }, rateMs);
+
+        spinTickStopper = setTimeout(() => {
+          stopSpinSound();
+        }, 5200);
+      }
+
+      function stopSpinSound() {
+        if (spinTickTimer) {
+          clearInterval(spinTickTimer);
+          spinTickTimer = null;
+        }
+        if (spinTickStopper) {
+          clearTimeout(spinTickStopper);
+          spinTickStopper = null;
+        }
+      }
+
+      function playWinSound() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.85, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+        gain.connect(ctx.destination);
+
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const osc3 = ctx.createOscillator();
+        osc1.type = "sine";
+        osc2.type = "sine";
+        osc3.type = "triangle";
+        osc1.frequency.setValueAtTime(660, now);
+        osc1.frequency.exponentialRampToValueAtTime(990, now + 0.25);
+        osc2.frequency.setValueAtTime(880, now + 0.12);
+        osc2.frequency.exponentialRampToValueAtTime(1320, now + 0.45);
+        osc3.frequency.setValueAtTime(523.25, now);
+        osc3.frequency.exponentialRampToValueAtTime(784, now + 0.6);
+
+        osc1.connect(gain);
+        osc2.connect(gain);
+        osc3.connect(gain);
+        osc1.start(now);
+        osc1.stop(now + 0.7);
+        osc2.start(now + 0.08);
+        osc2.stop(now + 0.9);
+        osc3.start(now + 0.18);
+        osc3.stop(now + 1.1);
+      }
+
+      function playLoseSound() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.5, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+        gain.connect(ctx.destination);
+
+        const osc = ctx.createOscillator();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(420, now);
+        osc.frequency.exponentialRampToValueAtTime(220, now + 0.6);
+        osc.connect(gain);
+        osc.start(now);
+        osc.stop(now + 0.8);
+      }
+
+      /* ════════════════════════════════════════════════
          CANVAS — dibujo de ruleta
       ════════════════════════════════════════════════ */
       let curRot = 0; // rotación acumulada (radianes)
@@ -1287,6 +1400,7 @@
         state.isSpinning = true;
         refs.spinBtn.disabled = true;
         refs.validateBtn.disabled = true;
+        startSpinSound();
         setStatus("Descontando un giro y preparando la ruleta...", null);
 
         try {
@@ -1294,6 +1408,7 @@
           if (!updatedRecord) {
             state.isSpinning = false;
             refs.validateBtn.disabled = false;
+            stopSpinSound();
             state.codeRecord = await validateCode(state.codeRecord.code);
             updateSummary();
             setStatus(
@@ -1314,6 +1429,13 @@
               .toLowerCase()
               .includes("sigue participando");
 
+            if (isWin) {
+              playWinSound();
+            } else {
+              playLoseSound();
+            }
+            stopSpinSound();
+
             refs.resultBox.innerHTML = `
               <strong>Resultado del giro</strong><br/>
               <span class="result-prize">${prize.label}</span><br />
@@ -1332,6 +1454,7 @@
         } catch (error) {
           state.isSpinning = false;
           refs.validateBtn.disabled = false;
+          stopSpinSound();
           updateSummary();
           setStatus(`No se pudo consumir el giro: ${error.message}`, "error");
         }
