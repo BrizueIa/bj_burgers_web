@@ -1365,6 +1365,17 @@
         return data;
       }
 
+      async function recordPrize(prize) {
+        if (!supabaseReady) return;
+        const code = state.codeRecord?.code;
+        if (!code) return;
+        const { error } = await supabaseClient
+          .from(SUPABASE_TABLE)
+          .update({ prize_label: prize.label })
+          .ilike("code", code);
+        if (error) throw error;
+      }
+
       function buildWeightedPool() {
         return PRIZES.map((prize, index) => ({
           index,
@@ -1505,7 +1516,7 @@
           setStatus("¡Girando la ruleta!", "ok");
 
           /* Girar canvas y mostrar resultado al terminar */
-          spinWheel(prize.index, () => {
+          spinWheel(prize.index, async () => {
             const isWin = !prize.label
               .toLowerCase()
               .includes("sigue participando");
@@ -1516,6 +1527,12 @@
               playLoseSound();
             }
             stopSpinSound();
+
+            try {
+              await recordPrize(prize);
+            } catch (error) {
+              console.error("No se pudo registrar el premio:", error);
+            }
 
             if (refs.resultBox) {
               refs.resultBox.innerHTML = `
