@@ -405,7 +405,7 @@
 
           <div class="summary-box" id="summary-box"></div>
 
-          <div class="config-box" id="config-box">
+          <div class="config-box" id="config-box" style="display: none;">
             Antes de usar esta pantalla, configura las variables <code>SUPABASE_URL</code> y
             <code>SUPABASE_ANON_KEY</code> en tu Worker de Cloudflare. La tabla esperada es
             <code>spin_codes</code> con columnas <code>id</code>, <code>code</code>,
@@ -682,11 +682,12 @@
         }
       });
 
-      renderWheelLabels();
-
-      if (supabaseReady) {
-        refs.configBox.style.display = "none";
+      function updateConfigBox() {
+        refs.configBox.style.display = supabaseReady ? "none" : "block";
       }
+
+      renderWheelLabels();
+      updateConfigBox();
     </script>
   </body>
 </html>
