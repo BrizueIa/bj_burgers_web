@@ -361,6 +361,62 @@
           align-items: flex-start;
         }
       }
+
+      @media (max-width: 720px) {
+        .layout {
+          gap: 1.1rem;
+        }
+
+        .layout > .panel:first-child {
+          order: 2;
+          padding: 1rem 1rem 1.2rem;
+        }
+
+        .layout > .panel:last-child {
+          order: 1;
+        }
+
+        .panel h2 {
+          font-size: 1.7rem;
+        }
+
+        .code-form {
+          gap: 0.6rem;
+          margin-top: 1rem;
+        }
+
+        .code-input {
+          padding: 0.85rem 0.95rem;
+          font-size: 0.95rem;
+        }
+
+        .action-btn {
+          padding: 0.85rem 1rem;
+          font-size: 0.95rem;
+        }
+
+        .status-box,
+        .summary-box,
+        .config-box {
+          padding: 0.85rem 0.95rem;
+        }
+
+        .wheel-panel {
+          padding: 1.2rem 1rem 1.5rem;
+        }
+
+        .wheel-title {
+          font-size: 2rem;
+        }
+
+        .wheel-wrap {
+          width: min(86vw, 420px);
+        }
+
+        .spin-btn {
+          width: 100%;
+        }
+      }
     </style>
   </head>
   <body>
