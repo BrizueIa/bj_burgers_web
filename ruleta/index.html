@@ -39,6 +39,11 @@
         color: #fff;
         font-family: "Nunito", sans-serif;
       }
+      html,
+      body {
+        overflow-x: hidden;
+        width: 100%;
+      }
       body::before {
         content: "";
         position: fixed;
@@ -53,6 +58,10 @@
         max-width: 1180px;
         margin: 0 auto;
         padding: 2rem 1.2rem 4rem;
+      }
+      .page {
+        width: 100%;
+        overflow-x: hidden;
       }
       .topbar {
         display: flex;
@@ -465,10 +474,133 @@
       @media (max-width: 900px) {
         .layout {
           grid-template-columns: 1fr;
+          gap: 1rem;
         }
         .topbar {
           flex-direction: column;
-          align-items: flex-start;
+          align-items: center;
+          text-align: center;
+          gap: 1rem;
+        }
+        .subtitle {
+          margin-inline: auto;
+        }
+        .back-link {
+          align-self: flex-start;
+        }
+        .layout > .panel:first-child {
+          order: 2;
+        }
+        .layout > .panel:last-child {
+          order: 1;
+        }
+      }
+      @media (max-width: 768px) {
+        .page {
+          padding: 1rem 0.8rem 2rem;
+        }
+        .panel {
+          padding: 1rem;
+          border-radius: 18px;
+        }
+        .brand {
+          font-size: clamp(2.2rem, 12vw, 3.5rem);
+          line-height: 1;
+        }
+        .subtitle {
+          font-size: 0.95rem;
+          max-width: 100%;
+        }
+        .panel h2,
+        .wheel-title {
+          font-size: 1.7rem;
+          text-align: center;
+        }
+        .wheel-panel {
+          padding: 1rem;
+          gap: 1rem;
+        }
+        .wheel-wrap {
+          width: min(82vw, 360px, 58vh);
+          height: min(82vw, 360px, 58vh);
+          margin-inline: auto;
+        }
+        canvas#wheel {
+          width: 100% !important;
+          height: 100% !important;
+        }
+        .pointer {
+          top: -2px;
+        }
+        .pointer-base {
+          width: 22px;
+          height: 9px;
+        }
+        .pointer-tip {
+          border-left: 11px solid transparent;
+          border-right: 11px solid transparent;
+          border-top: 22px solid #ffd700;
+        }
+        .hub {
+          width: 42px;
+          height: 42px;
+          font-size: 1.1rem;
+          border-width: 3px;
+        }
+        .spin-btn,
+        .action-btn {
+          width: 100%;
+          padding: 0.9rem 1rem;
+          font-size: 1rem;
+        }
+        .spin-btn {
+          font-size: 1.35rem;
+          padding: 0.85rem 1rem;
+        }
+        .code-input {
+          font-size: 16px;
+          padding: 0.9rem 1rem;
+        }
+        .result-box,
+        .status-box,
+        .summary-box,
+        .config-box {
+          font-size: 0.92rem;
+          padding: 0.85rem;
+        }
+        .footnote {
+          font-size: 0.8rem;
+        }
+        .modal {
+          padding: 1.8rem 1.2rem;
+          max-width: 300px;
+          border-radius: 22px;
+        }
+        .modal-emoji {
+          font-size: 3.2rem;
+        }
+        .modal-title {
+          font-size: 1.4rem;
+        }
+        .modal-prize {
+          font-size: 1rem;
+        }
+        .modal-close {
+          width: 100%;
+          padding: 0.8rem 1rem;
+          font-size: 1.1rem;
+        }
+      }
+      @media (max-width: 420px) {
+        .wheel-wrap {
+          width: min(78vw, 310px, 52vh);
+          height: min(78vw, 310px, 52vh);
+        }
+        .brand {
+          font-size: 2rem;
+        }
+        .spin-btn {
+          font-size: 1.15rem;
         }
       }
       @media (max-width: 720px) {
@@ -523,8 +655,7 @@
       <div class="topbar">
         <a class="back-link" href="../">VOLVER AL MENU</a>
         <div>
-          <div class="brand">RULETA DE REGALOS</div>
-          <p class="subtitle">Ingresa tu codigo para girar.</p>
+          <div class="brand">RULETA B&J BURGERS</div>
         </div>
       </div>
 
@@ -547,16 +678,7 @@
               VALIDAR
             </button>
           </form>
-          <div class="status-box" id="status-box">Ingresa tu codigo.</div>
           <div class="summary-box" id="summary-box"></div>
-          <div class="config-box" id="config-box" style="display: none">
-            Antes de usar esta pantalla, configura las variables
-            <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> en tu
-            Worker de Cloudflare. La tabla esperada es
-            <code>spin_codes</code> con columnas <code>id</code>,
-            <code>code</code>, <code>remaining_spins</code> e
-            <code>is_active</code>.
-          </div>
         </section>
 
         <!-- ── Ruleta panel ── -->
@@ -575,7 +697,7 @@
             <canvas id="wheel"></canvas>
             <div class="hub">⭐</div>
           </div>
-
+          <space></space>
           <button class="spin-btn" id="spin-btn" type="button" disabled>
             GIRAR RULETA
           </button>
@@ -814,9 +936,14 @@
       const ctx = refs.wheel.getContext("2d");
 
       function initWheel() {
-        const s = Math.min(480, window.innerWidth * 0.86);
-        refs.wheel.width = s;
-        refs.wheel.height = s;
+        const size = Math.min(
+          480,
+          window.innerWidth * 0.82,
+          window.innerHeight * 0.52,
+        );
+
+        refs.wheel.width = size;
+        refs.wheel.height = size;
         drawWheel(curRot);
       }
 
