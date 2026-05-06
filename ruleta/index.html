@@ -531,7 +531,7 @@
         const { data, error } = await supabaseClient
           .from(SUPABASE_TABLE)
           .select("id, code, remaining_spins, is_active")
-          .eq("code", code)
+          .ilike("code", code)
           .maybeSingle();
 
         if (error) {
