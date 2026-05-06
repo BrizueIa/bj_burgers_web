@@ -703,11 +703,6 @@
           <button class="spin-btn" id="spin-btn" type="button" disabled>
             GIRAR RULETA
           </button>
-
-          <div class="result-box" id="result-box">
-            <strong>Premio</strong> — Aqui veras el resultado.
-          </div>
-
           <p class="footnote">Premios sujetos a disponibilidad.</p>
         </section>
       </div>
@@ -1450,7 +1445,10 @@
             isCached: true,
           };
           updateSummary();
-          setStatus("Codigo valido. Giros canjeados en este dispositivo.", "ok");
+          setStatus(
+            "Codigo valido. Giros canjeados en este dispositivo.",
+            "ok",
+          );
           scrollToWheelOnMobile();
         } catch (error) {
           setStatus(`No se pudo validar el codigo: ${error.message}`, "error");
@@ -1477,7 +1475,10 @@
           if (state.codeRecord.isCached) {
             state.codeRecord.remaining_spins -= 1;
             if (state.codeRecord.remaining_spins > 0) {
-              saveSpinCache(state.codeRecord.code, state.codeRecord.remaining_spins);
+              saveSpinCache(
+                state.codeRecord.code,
+                state.codeRecord.remaining_spins,
+              );
             } else {
               clearSpinCache(state.codeRecord.code);
             }
