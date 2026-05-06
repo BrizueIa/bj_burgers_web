@@ -481,7 +481,7 @@
 
       const supabaseReady = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
-      const supabase = supabaseReady
+      const supabaseClient = supabaseReady
         ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
         : null;
 
@@ -528,7 +528,7 @@
       }
 
       async function validateCode(code) {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
           .from(SUPABASE_TABLE)
           .select("id, code, remaining_spins, is_active")
           .eq("code", code)
@@ -544,7 +544,7 @@
       async function consumeSpin() {
         const currentRemaining = Number(state.codeRecord.remaining_spins || 0);
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
           .from(SUPABASE_TABLE)
           .update({ remaining_spins: currentRemaining - 1 })
           .eq("id", state.codeRecord.id)
