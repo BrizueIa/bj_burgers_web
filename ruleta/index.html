@@ -22,22 +22,23 @@
         --success: #38d27a;
         --danger: #ff6666;
       }
-
       * {
         box-sizing: border-box;
         margin: 0;
         padding: 0;
       }
-
       body {
         min-height: 100vh;
         background:
-          radial-gradient(circle at top, rgba(255, 107, 0, 0.22), transparent 32%),
+          radial-gradient(
+            circle at top,
+            rgba(255, 107, 0, 0.22),
+            transparent 32%
+          ),
           linear-gradient(180deg, #120600 0%, #0a0a0a 40%, #050505 100%);
         color: #fff;
         font-family: "Nunito", sans-serif;
       }
-
       body::before {
         content: "";
         position: fixed;
@@ -46,7 +47,6 @@
         pointer-events: none;
         opacity: 0.35;
       }
-
       .page {
         position: relative;
         z-index: 1;
@@ -54,7 +54,6 @@
         margin: 0 auto;
         padding: 2rem 1.2rem 4rem;
       }
-
       .topbar {
         display: flex;
         align-items: center;
@@ -62,48 +61,51 @@
         gap: 1rem;
         margin-bottom: 2rem;
       }
-
       .back-link {
         color: var(--gold);
         text-decoration: none;
         font-family: "Oswald", sans-serif;
         letter-spacing: 0.08em;
       }
-
       .brand {
         font-family: "Bebas Neue", cursive;
         font-size: clamp(2.8rem, 7vw, 5rem);
         line-height: 0.9;
         letter-spacing: 0.04em;
-        background: linear-gradient(180deg, #fff 0%, var(--gold) 45%, var(--fire) 100%);
+        background: linear-gradient(
+          180deg,
+          #fff 0%,
+          var(--gold) 45%,
+          var(--fire) 100%
+        );
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
       }
-
       .subtitle {
         color: var(--text-soft);
         max-width: 520px;
         margin-top: 0.8rem;
         line-height: 1.55;
       }
-
       .layout {
         display: grid;
         grid-template-columns: minmax(300px, 420px) minmax(320px, 1fr);
         gap: 1.5rem;
         align-items: start;
       }
-
       .panel {
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.02));
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.03),
+          rgba(255, 255, 255, 0.02)
+        );
         border: 1px solid var(--line);
         border-radius: 24px;
         padding: 1.5rem;
         box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
         backdrop-filter: blur(20px);
       }
-
       .panel h2,
       .wheel-title {
         font-family: "Bebas Neue", cursive;
@@ -111,20 +113,17 @@
         letter-spacing: 0.06em;
         color: var(--fire-bright);
       }
-
       .panel-copy,
       .wheel-copy {
         color: var(--text-soft);
         line-height: 1.55;
         margin-top: 0.5rem;
       }
-
       .code-form {
         display: grid;
         gap: 0.9rem;
         margin-top: 1.5rem;
       }
-
       .code-input {
         width: 100%;
         padding: 1rem 1.1rem;
@@ -136,15 +135,12 @@
         font-size: 1rem;
         text-transform: uppercase;
       }
-
       .code-input:focus {
         outline: none;
         border-color: rgba(255, 170, 0, 0.7);
         box-shadow: 0 0 0 4px rgba(255, 170, 0, 0.12);
       }
-
-      .action-btn,
-      .spin-btn {
+      .action-btn {
         border: none;
         border-radius: 14px;
         cursor: pointer;
@@ -157,33 +153,19 @@
           transform 0.2s,
           opacity 0.2s,
           box-shadow 0.2s;
-      }
-
-      .action-btn {
         padding: 1rem 1.2rem;
         background: linear-gradient(135deg, var(--fire-dark), var(--fire));
         box-shadow: 0 14px 32px rgba(255, 107, 0, 0.26);
       }
-
-      .spin-btn {
-        padding: 1rem 2rem;
-        background: linear-gradient(135deg, #a70c00, #ff4a00, #ffaa00);
-        box-shadow: 0 16px 38px rgba(255, 107, 0, 0.28);
-      }
-
-      .action-btn:hover,
-      .spin-btn:hover {
+      .action-btn:hover {
         transform: translateY(-2px);
       }
-
-      .action-btn:disabled,
-      .spin-btn:disabled {
+      .action-btn:disabled {
         cursor: not-allowed;
         opacity: 0.55;
         transform: none;
         box-shadow: none;
       }
-
       .status-box,
       .summary-box,
       .result-box,
@@ -192,29 +174,24 @@
         padding: 1rem 1.1rem;
         margin-top: 1rem;
       }
-
       .status-box {
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.08);
         color: var(--text-soft);
         min-height: 70px;
       }
-
       .summary-box {
         display: none;
         background: rgba(255, 170, 0, 0.08);
         border: 1px solid rgba(255, 170, 0, 0.2);
       }
-
       .summary-box.visible {
         display: block;
       }
-
       .summary-box strong,
       .result-prize {
         color: var(--gold);
       }
-
       .config-box {
         background: rgba(255, 102, 102, 0.08);
         border: 1px solid rgba(255, 102, 102, 0.2);
@@ -222,113 +199,141 @@
         line-height: 1.55;
       }
 
+      /* ── Wheel panel ── */
       .wheel-panel {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 1.25rem;
       }
-
       .wheel-wrap {
         position: relative;
-        width: min(78vw, 480px);
-        aspect-ratio: 1;
+        width: min(480px, 86vw);
+        height: min(480px, 86vw);
         display: grid;
         place-items: center;
         margin-top: 0.5rem;
       }
 
-      .wheel-pointer {
+      /* Pointer */
+      .pointer {
         position: absolute;
-        top: -8px;
+        top: -6px;
         left: 50%;
         transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .pointer-base {
+        width: 28px;
+        height: 12px;
+        background: linear-gradient(135deg, #ffe44d, #cc8800);
+        border-radius: 6px 6px 0 0;
+        box-shadow: 0 -2px 8px #ffd70099;
+      }
+      .pointer-tip {
         width: 0;
         height: 0;
-        border-left: 18px solid transparent;
-        border-right: 18px solid transparent;
-        border-top: 34px solid var(--gold);
-        filter: drop-shadow(0 4px 16px rgba(255, 215, 0, 0.5));
-        z-index: 4;
+        border-left: 14px solid transparent;
+        border-right: 14px solid transparent;
+        border-top: 28px solid #ffd700;
+        filter: drop-shadow(0 3px 6px #ff6300aa);
       }
 
-      .wheel-shell {
-        width: 100%;
-        height: 100%;
+      /* Canvas wheel */
+      canvas#wheel {
+        display: block;
         border-radius: 50%;
-        padding: 14px;
-        background: linear-gradient(135deg, #ffd700, #ff7a00, #6b1600);
         box-shadow:
-          0 0 0 10px rgba(255, 255, 255, 0.03),
-          0 28px 60px rgba(0, 0, 0, 0.45);
+          0 0 0 7px #740000,
+          0 0 0 13px #ffd700,
+          0 0 0 16px #5a0000,
+          0 0 70px #ff000055;
       }
 
-      .wheel {
-        position: relative;
-        width: 100%;
-        height: 100%;
-        border-radius: 50%;
-        overflow: hidden;
-        border: 4px solid rgba(255, 255, 255, 0.08);
-        background:
-          conic-gradient(
-            #ff6200 0deg 45deg,
-            #ffd700 45deg 90deg,
-            #ff9340 90deg 135deg,
-            #ff3d00 135deg 180deg,
-            #ff6200 180deg 225deg,
-            #ffd700 225deg 270deg,
-            #ff9340 270deg 315deg,
-            #ff3d00 315deg 360deg
-          );
-        transition: transform 5.2s cubic-bezier(0.12, 0.9, 0.18, 1);
-      }
-
-      .wheel::after {
-        content: "";
-        position: absolute;
-        inset: 50%;
-        width: 88px;
-        height: 88px;
-        transform: translate(-50%, -50%);
-        border-radius: 50%;
-        background: radial-gradient(circle, #2f1300 0%, #140700 100%);
-        border: 6px solid rgba(255, 215, 0, 0.8);
-        box-shadow: 0 0 25px rgba(255, 170, 0, 0.35);
-        z-index: 2;
-      }
-
-      .wheel-label {
+      /* Center hub */
+      .hub {
         position: absolute;
         top: 50%;
         left: 50%;
-        width: 44%;
-        text-align: right;
-        transform-origin: 0 0;
-        font-family: "Oswald", sans-serif;
-        font-size: clamp(0.72rem, 1.8vw, 0.95rem);
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        color: #1d0c00;
-        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
-        z-index: 1;
+        transform: translate(-50%, -50%);
+        width: 54px;
+        height: 54px;
+        background: radial-gradient(circle at 35% 35%, #fffde0, #cc8800);
+        border-radius: 50%;
+        border: 4px solid #fff;
+        box-shadow:
+          0 0 24px #ffd700cc,
+          0 2px 8px rgba(0, 0, 0, 0.5);
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+      }
+
+      /* Spin button */
+      .spin-btn {
+        border: none;
+        border-radius: 50px;
+        cursor: pointer;
+        font-family: "Bebas Neue", cursive;
+        font-size: 1.7rem;
+        letter-spacing: 1px;
+        padding: 0.9rem 3.2rem;
+        background: linear-gradient(135deg, #ffe033 0%, #ff6300 100%);
+        color: #1a0500;
+        box-shadow:
+          0 6px 0 #7a2d00,
+          0 8px 25px #ff630055;
+        transition:
+          transform 0.12s,
+          box-shadow 0.12s;
+        animation: pulse-btn 2.4s ease-in-out infinite;
+      }
+      @keyframes pulse-btn {
+        0%,
+        100% {
+          box-shadow:
+            0 6px 0 #7a2d00,
+            0 8px 25px #ff630055;
+        }
+        50% {
+          box-shadow:
+            0 6px 0 #7a2d00,
+            0 8px 35px #ff6300aa;
+        }
+      }
+      .spin-btn:hover {
+        transform: translateY(-3px);
+        animation: none;
+        box-shadow:
+          0 9px 0 #7a2d00,
+          0 12px 30px #ff630088;
+      }
+      .spin-btn:active {
+        transform: translateY(5px);
+        box-shadow: 0 1px 0 #7a2d00;
+        animation: none;
+      }
+      .spin-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        transform: none;
+        animation: none;
       }
 
       .result-box {
         width: 100%;
-        min-height: 88px;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        text-align: center;
+        border-radius: 16px;
+        padding: 1rem 1.1rem;
         color: var(--text-soft);
+        line-height: 1.6;
       }
-
-      .result-box strong {
-        display: block;
-        margin-bottom: 0.3rem;
-        color: #fff;
-      }
-
       .footnote {
         width: 100%;
         color: #8f8f8f;
@@ -337,14 +342,120 @@
         text-align: center;
       }
 
+      /* ── Modal ── */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.82);
+        backdrop-filter: blur(5px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.35s ease;
+      }
+      .modal-overlay.visible {
+        opacity: 1;
+        pointer-events: all;
+      }
+      .modal {
+        border-radius: 28px;
+        padding: 2.5rem 2rem;
+        max-width: 360px;
+        width: 92%;
+        text-align: center;
+        transform: scale(0.7) translateY(40px);
+        transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        position: relative;
+        overflow: hidden;
+      }
+      .modal-overlay.visible .modal {
+        transform: scale(1) translateY(0);
+      }
+      .modal.win {
+        background: linear-gradient(145deg, #1c3a00, #0d2200);
+        border: 3px solid #4caf50;
+        box-shadow:
+          0 0 60px #4caf5066,
+          0 20px 60px rgba(0, 0, 0, 0.6);
+      }
+      .modal.lose {
+        background: linear-gradient(145deg, #1a1a1a, #0d0d0d);
+        border: 3px solid #555;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+      }
+      .modal.win::before {
+        content: "🎊 🌟 🎉 ⭐ 🎊 🌟 🎉";
+        position: absolute;
+        top: 0.5rem;
+        left: 0;
+        right: 0;
+        font-size: 1.4rem;
+        letter-spacing: 4px;
+        opacity: 0.6;
+      }
+      .modal-emoji {
+        font-size: 4.5rem;
+        margin-bottom: 0.6rem;
+        display: block;
+      }
+      .modal-title {
+        font-family: "Bebas Neue", cursive;
+        font-size: 1.7rem;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.5rem;
+      }
+      .modal.win .modal-title {
+        color: #7fff44;
+      }
+      .modal.lose .modal-title {
+        color: #aaa;
+      }
+      .modal-prize {
+        font-size: 1.25rem;
+        font-weight: 900;
+        margin-bottom: 1.8rem;
+        line-height: 1.3;
+        font-family: "Nunito", sans-serif;
+      }
+      .modal.win .modal-prize {
+        color: #fff;
+      }
+      .modal.lose .modal-prize {
+        color: #666;
+      }
+      .modal-close {
+        padding: 0.75rem 2.2rem;
+        font-family: "Bebas Neue", cursive;
+        font-size: 1.3rem;
+        letter-spacing: 0.06em;
+        border: none;
+        border-radius: 50px;
+        cursor: pointer;
+        transition: transform 0.1s;
+      }
+      .modal-close:hover {
+        transform: scale(1.05);
+      }
+      .modal.win .modal-close {
+        background: linear-gradient(135deg, #7fff44, #33bb00);
+        color: #0d2200;
+        box-shadow: 0 4px 0 #1a6600;
+      }
+      .modal.lose .modal-close {
+        background: #333;
+        color: #aaa;
+        box-shadow: 0 4px 0 #111;
+      }
+
       .ok {
         color: var(--success);
       }
-
       .error {
         color: var(--danger);
       }
-
       code {
         background: rgba(255, 255, 255, 0.08);
         padding: 0.12rem 0.35rem;
@@ -355,64 +466,52 @@
         .layout {
           grid-template-columns: 1fr;
         }
-
         .topbar {
           flex-direction: column;
           align-items: flex-start;
         }
       }
-
       @media (max-width: 720px) {
         .layout {
           gap: 1.1rem;
         }
-
         .layout > .panel:first-child {
           order: 2;
           padding: 1rem 1rem 1.2rem;
         }
-
         .layout > .panel:last-child {
           order: 1;
         }
-
         .panel h2 {
           font-size: 1.7rem;
         }
-
         .code-form {
           gap: 0.6rem;
           margin-top: 1rem;
         }
-
         .code-input {
           padding: 0.85rem 0.95rem;
           font-size: 0.95rem;
         }
-
         .action-btn {
           padding: 0.85rem 1rem;
           font-size: 0.95rem;
         }
-
         .status-box,
         .summary-box,
         .config-box {
           padding: 0.85rem 0.95rem;
         }
-
         .wheel-panel {
           padding: 1.2rem 1rem 1.5rem;
         }
-
         .wheel-title {
           font-size: 2rem;
         }
-
         .wheel-wrap {
           width: min(86vw, 420px);
+          height: min(86vw, 420px);
         }
-
         .spin-btn {
           width: 100%;
         }
@@ -425,63 +524,56 @@
         <a class="back-link" href="../">VOLVER AL MENU</a>
         <div>
           <div class="brand">RULETA DE REGALOS</div>
-          <p class="subtitle">
-            Ingresa tu codigo, valida tus giros disponibles y activa la ruleta.
-            La configuracion de premios y probabilidades la dejamos lista para la siguiente etapa.
-          </p>
+          <p class="subtitle">Ingresa tu codigo para girar.</p>
         </div>
       </div>
 
       <div class="layout">
+        <!-- ── Código panel (sin cambios) ── -->
         <section class="panel">
-          <h2>Valida tu codigo</h2>
-          <p class="panel-copy">
-            El codigo se consulta en Supabase. Si existe y tiene giros disponibles,
-            se habilita el boton para girar.
-          </p>
-
+          <h2>Tu codigo</h2>
+          <p class="panel-copy"></p>
           <form class="code-form" id="code-form">
             <input
               class="code-input"
               id="code-input"
               type="text"
               name="code"
-              placeholder="Ejemplo: BJ2026VIP"
+              placeholder="Codigo"
               autocomplete="off"
               required
             />
             <button class="action-btn" id="validate-btn" type="submit">
-              VALIDAR CODIGO
+              VALIDAR
             </button>
           </form>
-
-          <div class="status-box" id="status-box">
-            Ingresa un codigo para consultar si existe y cuantos giros tiene disponibles.
-          </div>
-
+          <div class="status-box" id="status-box">Ingresa tu codigo.</div>
           <div class="summary-box" id="summary-box"></div>
-
-          <div class="config-box" id="config-box" style="display: none;">
-            Antes de usar esta pantalla, configura las variables <code>SUPABASE_URL</code> y
-            <code>SUPABASE_ANON_KEY</code> en tu Worker de Cloudflare. La tabla esperada es
-            <code>spin_codes</code> con columnas <code>id</code>, <code>code</code>,
-            <code>remaining_spins</code> e <code>is_active</code>.
+          <div class="config-box" id="config-box" style="display: none">
+            Antes de usar esta pantalla, configura las variables
+            <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> en tu
+            Worker de Cloudflare. La tabla esperada es
+            <code>spin_codes</code> con columnas <code>id</code>,
+            <code>code</code>, <code>remaining_spins</code> e
+            <code>is_active</code>.
           </div>
         </section>
 
+        <!-- ── Ruleta panel ── -->
         <section class="panel wheel-panel">
           <div>
             <div class="wheel-title">Ruleta</div>
-            <p class="wheel-copy">
-              Esta version ya valida el codigo y descuenta el giro antes de ejecutar la animacion.
-            </p>
+            <p class="wheel-copy"></p>
           </div>
 
+          <!-- Canvas wheel replaces old div#wheel -->
           <div class="wheel-wrap">
-            <div class="wheel-pointer"></div>
-            <div class="wheel-shell">
-              <div class="wheel" id="wheel"></div>
+            <div class="pointer">
+              <div class="pointer-base"></div>
+              <div class="pointer-tip"></div>
             </div>
+            <canvas id="wheel"></canvas>
+            <div class="hub">⭐</div>
           </div>
 
           <button class="spin-btn" id="spin-btn" type="button" disabled>
@@ -489,39 +581,214 @@
           </button>
 
           <div class="result-box" id="result-box">
-            <strong>Premio pendiente</strong>
-            Cuando definamos porcentajes y premios reales, esta caja mostrara el resultado final.
+            <strong>Premio</strong> — Aqui veras el resultado.
           </div>
 
-          <p class="footnote">
-            Por ahora la ruleta usa premios de ejemplo para dejar listo el flujo completo de acceso,
-            validacion y consumo de giros.
-          </p>
+          <p class="footnote">Premios sujetos a disponibilidad.</p>
         </section>
+      </div>
+    </div>
+
+    <!-- ── Result modal ── -->
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal" id="modal">
+        <span class="modal-emoji" id="mEmoji"></span>
+        <div class="modal-title" id="mTitle"></div>
+        <div class="modal-prize" id="mPrize"></div>
+        <button class="modal-close" onclick="closeModal()">¡Entendido!</button>
       </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
+      /* ════════════════════════════════════════════════
+         CONFIGURACIÓN SUPABASE — sin cambios
+      ════════════════════════════════════════════════ */
       const SUPABASE_URL = window.__SUPABASE_URL || "";
       const SUPABASE_ANON_KEY = window.__SUPABASE_ANON_KEY || "";
       const SUPABASE_TABLE = "spin_codes";
+
+      /* ════════════════════════════════════════════════
+         PREMIOS — sin cambios (pesos originales)
+      ════════════════════════════════════════════════ */
       const PRIZES = [
-        "Papas gratis",
-        "Refresco gratis",
-        "10% de descuento",
-        "Aros de cebolla",
-        "Extra de tocino",
-        "15% de descuento",
-        "Complemento gratis",
-        "Burger sorpresa",
+        { label: "😢 Sigue participando", weight: 35 },
+        { label: "10% descuento proxima compra", weight: 18 },
+        { label: "15% descuento proxima compra", weight: 10 },
+        { label: "Porcion de papas gratis", weight: 10 },
+        { label: "1 extra gratis", weight: 10 },
+        { label: "Refresco con 50% descuento", weight: 5 },
+        { label: "Orden de papas al 50%", weight: 4 },
+        { label: "Orden de papas gratis", weight: 3 },
+        { label: "20% descuento proxima compra", weight: 3 },
+        { label: "Hot dog clasico gratis", weight: 1 },
+        { label: "Hamburguesa clasica gratis", weight: 1 },
       ];
 
-      const state = {
-        codeRecord: null,
-        isSpinning: false,
-        rotation: 0,
-      };
+      /* Emoji para modal, uno por índice de PRIZES */
+      const PRIZE_EMOJI = [
+        "😢",
+        "🏷️",
+        "💚",
+        "🍟",
+        "🎁",
+        "🥤",
+        "🍟",
+        "🍟",
+        "🤩",
+        "🌭",
+        "🍔",
+      ];
+
+      /* ════════════════════════════════════════════════
+         SEGMENTOS DEL CANVAS
+         "Sigue participando" = 5 bloques × 7% = 35%
+         intercalados para mayor impacto visual.
+      ════════════════════════════════════════════════ */
+      const SEG = [
+        {
+          label: "😢 Sigue\nparticipando",
+          short: "😢",
+          prob: 7,
+          color: "#252525",
+          border: "#3a3a3a",
+          text: "#777",
+        },
+        {
+          label: "10% descuento\npróxima compra",
+          short: "10%\ndesc.",
+          prob: 18,
+          color: "#C84B00",
+          border: "#FF6B1A",
+          text: "#fff",
+        },
+        {
+          label: "😢 Sigue\nparticipando",
+          short: "😢",
+          prob: 7,
+          color: "#252525",
+          border: "#3a3a3a",
+          text: "#777",
+        },
+        {
+          label: "Porción de\npapas gratis",
+          short: "🍟\nGratis",
+          prob: 10,
+          color: "#A06800",
+          border: "#FFD700",
+          text: "#fff",
+        },
+        {
+          label: "😢 Sigue\nparticipando",
+          short: "😢",
+          prob: 7,
+          color: "#252525",
+          border: "#3a3a3a",
+          text: "#777",
+        },
+        {
+          label: "15% descuento\npróxima compra",
+          short: "15%\ndesc.",
+          prob: 10,
+          color: "#1a6e30",
+          border: "#33bb55",
+          text: "#fff",
+        },
+        {
+          label: "😢 Sigue\nparticipando",
+          short: "😢",
+          prob: 7,
+          color: "#252525",
+          border: "#3a3a3a",
+          text: "#777",
+        },
+        {
+          label: "1 Extra\ngratis",
+          short: "🎁\nExtra",
+          prob: 10,
+          color: "#0d4ea6",
+          border: "#3d8eff",
+          text: "#fff",
+        },
+        {
+          label: "😢 Sigue\nparticipando",
+          short: "😢",
+          prob: 7,
+          color: "#252525",
+          border: "#3a3a3a",
+          text: "#777",
+        },
+        {
+          label: "Refresco\n50% desc.",
+          short: "🥤 50%",
+          prob: 5,
+          color: "#8b003b",
+          border: "#e0005e",
+          text: "#fff",
+        },
+        {
+          label: "Papas\n50% desc.",
+          short: "🍟 50%",
+          prob: 4,
+          color: "#994000",
+          border: "#ff6a00",
+          text: "#fff",
+        },
+        {
+          label: "Papas\ngratis",
+          short: "🍟 Free",
+          prob: 3,
+          color: "#5a0e8e",
+          border: "#9b30e0",
+          text: "#fff",
+        },
+        {
+          label: "20% descuento\npróxima compra",
+          short: "20%",
+          prob: 3,
+          color: "#005f6b",
+          border: "#00b8cc",
+          text: "#fff",
+        },
+        {
+          label: "🌭 Hot dog\nclásico gratis",
+          short: "🌭",
+          prob: 1,
+          color: "#9e0000",
+          border: "#ff3333",
+          text: "#fff",
+        },
+        {
+          label: "🍔 Hamburguesa\nclásica gratis",
+          short: "🍔",
+          prob: 1,
+          color: "#1a5200",
+          border: "#3daa00",
+          text: "#fff",
+        },
+      ];
+
+      /* Mapeo PRIZES[idx] → índice(s) en SEG */
+      const PRIZE_TO_SEG = [
+        [0, 2, 4, 6, 8], // PRIZES[0]  Sigue participando  (5 bloques SP)
+        [1], // PRIZES[1]  10% desc.
+        [5], // PRIZES[2]  15% desc.
+        [3], // PRIZES[3]  Papas gratis (porción)
+        [7], // PRIZES[4]  1 extra
+        [9], // PRIZES[5]  Refresco 50%
+        [10], // PRIZES[6]  Papas 50%
+        [11], // PRIZES[7]  Papas gratis
+        [12], // PRIZES[8]  20% desc.
+        [13], // PRIZES[9]  Hot dog
+        [14], // PRIZES[10] Hamburguesa
+      ];
+
+      const SEG_TOTAL = SEG.reduce((s, x) => s + x.prob, 0); // 100
+
+      /* ════════════════════════════════════════════════
+         ESTADO & REFERENCIAS — sin cambios en Supabase
+      ════════════════════════════════════════════════ */
+      const state = { codeRecord: null, isSpinning: false };
 
       const refs = {
         codeForm: document.getElementById("code-form"),
@@ -530,40 +797,221 @@
         statusBox: document.getElementById("status-box"),
         summaryBox: document.getElementById("summary-box"),
         configBox: document.getElementById("config-box"),
-        wheel: document.getElementById("wheel"),
+        wheel: document.getElementById("wheel"), // ahora canvas
         spinBtn: document.getElementById("spin-btn"),
         resultBox: document.getElementById("result-box"),
       };
 
       const supabaseReady = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
-
       const supabaseClient = supabaseReady
         ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
         : null;
 
-      function renderWheelLabels() {
-        const segmentAngle = 360 / PRIZES.length;
+      /* ════════════════════════════════════════════════
+         CANVAS — dibujo de ruleta
+      ════════════════════════════════════════════════ */
+      let curRot = 0; // rotación acumulada (radianes)
+      const ctx = refs.wheel.getContext("2d");
 
-        PRIZES.forEach((prize, index) => {
-          const label = document.createElement("div");
-          label.className = "wheel-label";
-          label.style.transform = `rotate(${segmentAngle * index - 67.5}deg) translate(14px, -50%)`;
-          label.textContent = prize;
-          refs.wheel.appendChild(label);
-        });
+      function initWheel() {
+        const s = Math.min(480, window.innerWidth * 0.86);
+        refs.wheel.width = s;
+        refs.wheel.height = s;
+        drawWheel(curRot);
       }
 
+      function drawWheel(rot) {
+        const W = refs.wheel.width;
+        const cx = W / 2,
+          cy = W / 2,
+          R = W / 2 - 3;
+        ctx.clearRect(0, 0, W, W);
+
+        /* Aro dorado exterior */
+        ctx.beginPath();
+        ctx.arc(cx, cy, R + 2, 0, Math.PI * 2);
+        ctx.fillStyle = "#FFD700";
+        ctx.fill();
+
+        let startA = rot - Math.PI / 2; // 0 = arriba
+
+        SEG.forEach((seg) => {
+          const sweep = (seg.prob / SEG_TOTAL) * 2 * Math.PI;
+          const endA = startA + sweep;
+          const midA = startA + sweep / 2;
+
+          /* Relleno */
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, R, startA, endA);
+          ctx.closePath();
+          ctx.fillStyle = seg.color;
+          ctx.fill();
+
+          /* Borde */
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, R, startA, endA);
+          ctx.closePath();
+          ctx.strokeStyle = seg.border + "99";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          /* Brillo interior */
+          ctx.beginPath();
+          ctx.arc(cx, cy, R * 0.38, startA, endA);
+          ctx.strokeStyle = "rgba(255,255,255,0.06)";
+          ctx.lineWidth = 14;
+          ctx.stroke();
+
+          /* Texto */
+          const angleDeg = (seg.prob / SEG_TOTAL) * 360;
+          const fs =
+            angleDeg >= 22 ? 13 : angleDeg >= 14 ? 11 : angleDeg >= 8 ? 9 : 7;
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(midA);
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = seg.text;
+
+          const textR = R * 0.63;
+
+          if (angleDeg >= 12) {
+            const lines = seg.label.split("\n");
+            const lh = fs + 3;
+            ctx.font = `bold ${fs}px 'Nunito', sans-serif`;
+            lines.forEach((ln, i) =>
+              ctx.fillText(ln, textR, (i - (lines.length - 1) / 2) * lh),
+            );
+          } else if (angleDeg >= 5) {
+            const lines = seg.short.split("\n");
+            const lh = fs + 2;
+            ctx.font = `bold ${fs}px 'Nunito', sans-serif`;
+            lines.forEach((ln, i) =>
+              ctx.fillText(ln, textR, (i - (lines.length - 1) / 2) * lh),
+            );
+          } else {
+            ctx.font = `${fs + 3}px sans-serif`;
+            ctx.fillText(seg.short, textR, 0);
+          }
+
+          ctx.restore();
+          startA = endA;
+        });
+
+        /* Cúpula brillante */
+        const shine = ctx.createRadialGradient(
+          cx - R * 0.22,
+          cy - R * 0.22,
+          0,
+          cx,
+          cy,
+          R,
+        );
+        shine.addColorStop(0, "rgba(255,255,255,0.12)");
+        shine.addColorStop(0.5, "rgba(255,255,255,0.03)");
+        shine.addColorStop(1, "rgba(0,0,0,0.2)");
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = shine;
+        ctx.fill();
+      }
+
+      /* Ángulo del centro de un segmento SEG (desde el tope, sentido horario) */
+      function segMidAngle(segIdx) {
+        let acc = 0;
+        for (let i = 0; i < segIdx; i++) acc += SEG[i].prob;
+        return ((acc + SEG[segIdx].prob / 2) / SEG_TOTAL) * 2 * Math.PI;
+      }
+
+      /* ════════════════════════════════════════════════
+         ANIMACIÓN DE GIRO  (reemplaza el antiguo spinWheel)
+         prizeIdx  = índice en PRIZES[]
+         onComplete = callback al terminar la animación
+      ════════════════════════════════════════════════ */
+      function spinWheel(prizeIdx, onComplete) {
+        /* Elegir cuál bloque SEG usar (SP tiene 5 opciones) */
+        const segOptions = PRIZE_TO_SEG[prizeIdx];
+        const segIdx =
+          segOptions[Math.floor(Math.random() * segOptions.length)];
+
+        const targetMid = segMidAngle(segIdx);
+
+        /* Calcular delta para que el segmento quede bajo el puntero */
+        const desired =
+          ((-targetMid % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        const curNorm =
+          ((curRot % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        let delta = (desired - curNorm + 2 * Math.PI) % (2 * Math.PI);
+        if (delta < 0.15) delta += 2 * Math.PI;
+
+        /* Jitter pequeño dentro del segmento */
+        const jitter =
+          (Math.random() - 0.5) *
+          (SEG[segIdx].prob / SEG_TOTAL) *
+          2 *
+          Math.PI *
+          0.5;
+
+        const spins = (5 + Math.floor(Math.random() * 5)) * 2 * Math.PI;
+        const travel = spins + delta + jitter;
+        const from = curRot;
+        const dur = 4500 + Math.random() * 1200;
+        const t0 = performance.now();
+
+        function ease(t) {
+          return 1 - Math.pow(1 - t, 4);
+        }
+
+        (function frame(now) {
+          const t = Math.min((now - t0) / dur, 1);
+          curRot = from + travel * ease(t);
+          drawWheel(curRot);
+          if (t < 1) {
+            requestAnimationFrame(frame);
+          } else {
+            curRot = from + travel; // mantener valor acumulado sin normalizar
+            if (onComplete) onComplete();
+          }
+        })(t0);
+      }
+
+      /* ════════════════════════════════════════════════
+         MODAL
+      ════════════════════════════════════════════════ */
+      function showModal(label, emoji, isWin) {
+        const overlay = document.getElementById("modalOverlay");
+        const modal = document.getElementById("modal");
+        modal.className = "modal " + (isWin ? "win" : "lose");
+
+        document.getElementById("mEmoji").textContent = emoji;
+        document.getElementById("mTitle").textContent = isWin
+          ? "¡FELICIDADES!"
+          : "¡MEJOR SUERTE LA PROXIMA!";
+        document.getElementById("mPrize").textContent = isWin
+          ? label
+          : "Sigue participando, ¡no te rindas!";
+
+        overlay.classList.add("visible");
+      }
+
+      function closeModal() {
+        document.getElementById("modalOverlay").classList.remove("visible");
+        /* Re-habilitar controles al cerrar el modal */
+        state.isSpinning = false;
+        refs.validateBtn.disabled = false;
+        updateSummary();
+      }
+
+      /* ════════════════════════════════════════════════
+         LÓGICA SUPABASE — sin cambios
+      ════════════════════════════════════════════════ */
       function setStatus(message, tone) {
         refs.statusBox.className = "status-box";
-
-        if (tone === "ok") {
-          refs.statusBox.classList.add("ok");
-        }
-
-        if (tone === "error") {
-          refs.statusBox.classList.add("error");
-        }
-
+        if (tone === "ok") refs.statusBox.classList.add("ok");
+        if (tone === "error") refs.statusBox.classList.add("error");
         refs.statusBox.textContent = message;
       }
 
@@ -574,13 +1022,13 @@
           refs.spinBtn.disabled = true;
           return;
         }
-
         refs.summaryBox.className = "summary-box visible";
         refs.summaryBox.innerHTML = `
           <strong>Codigo validado:</strong> ${state.codeRecord.code}<br />
           <strong>Giros disponibles:</strong> ${state.codeRecord.remaining_spins}
         `;
-        refs.spinBtn.disabled = state.codeRecord.remaining_spins < 1 || state.isSpinning;
+        refs.spinBtn.disabled =
+          state.codeRecord.remaining_spins < 1 || state.isSpinning;
       }
 
       async function validateCode(code) {
@@ -589,17 +1037,12 @@
           .select("id, code, remaining_spins, is_active")
           .ilike("code", code)
           .maybeSingle();
-
-        if (error) {
-          throw error;
-        }
-
+        if (error) throw error;
         return data;
       }
 
       async function consumeSpin() {
         const currentRemaining = Number(state.codeRecord.remaining_spins || 0);
-
         const { data, error } = await supabaseClient
           .from(SUPABASE_TABLE)
           .update({ remaining_spins: currentRemaining - 1 })
@@ -608,39 +1051,43 @@
           .gt("remaining_spins", 0)
           .select("id, code, remaining_spins, is_active")
           .maybeSingle();
-
-        if (error) {
-          throw error;
-        }
-
+        if (error) throw error;
         return data;
       }
 
+      function buildWeightedPool() {
+        return PRIZES.map((prize, index) => ({
+          index,
+          weight: prize.weight,
+          label: prize.label,
+        }));
+      }
+
       function pickPrize() {
-        const index = Math.floor(Math.random() * PRIZES.length);
-        return { name: PRIZES[index], index };
+        const pool = buildWeightedPool();
+        const total = pool.reduce((sum, item) => sum + item.weight, 0);
+        let roll = Math.random() * total;
+        for (const item of pool) {
+          roll -= item.weight;
+          if (roll <= 0) return item;
+        }
+        return pool[pool.length - 1];
       }
 
-      function spinWheel(prizeIndex) {
-        const segmentAngle = 360 / PRIZES.length;
-        const currentNormalized = state.rotation % 360;
-        const landingAngle = 360 - prizeIndex * segmentAngle - segmentAngle / 2;
-        const delta = 360 * 6 + landingAngle - currentNormalized;
-
-        state.rotation += delta;
-        refs.wheel.style.transform = `rotate(${state.rotation}deg)`;
-      }
-
+      /* ════════════════════════════════════════════════
+         EVENT LISTENERS — lógica Supabase intacta;
+         spinWheel ahora recibe callback en lugar de setTimeout
+      ════════════════════════════════════════════════ */
       refs.codeForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-
         if (!supabaseReady) {
-          setStatus("Falta configurar Supabase en este archivo antes de validar codigos.", "error");
+          setStatus(
+            "Falta configurar Supabase en este archivo antes de validar codigos.",
+            "error",
+          );
           return;
         }
-
         const code = refs.codeInput.value.trim().toUpperCase();
-
         if (!code) {
           setStatus("Ingresa un codigo valido.", "error");
           return;
@@ -654,19 +1101,16 @@
 
         try {
           const record = await validateCode(code);
-
           if (!record || record.is_active === false) {
             setStatus("El codigo no existe o esta inactivo.", "error");
             return;
           }
-
           if (Number(record.remaining_spins || 0) < 1) {
             state.codeRecord = record;
             updateSummary();
             setStatus("Este codigo ya no tiene giros disponibles.", "error");
             return;
           }
-
           state.codeRecord = record;
           updateSummary();
           setStatus("Codigo valido. Ya puedes girar la ruleta.", "ok");
@@ -678,10 +1122,7 @@
       });
 
       refs.spinBtn.addEventListener("click", async () => {
-        if (!state.codeRecord || state.isSpinning) {
-          return;
-        }
-
+        if (!state.codeRecord || state.isSpinning) return;
         if (Number(state.codeRecord.remaining_spins || 0) < 1) {
           updateSummary();
           setStatus("Este codigo ya no tiene giros disponibles.", "error");
@@ -695,30 +1136,34 @@
 
         try {
           const updatedRecord = await consumeSpin();
-
           if (!updatedRecord) {
             state.isSpinning = false;
             refs.validateBtn.disabled = false;
             state.codeRecord = await validateCode(state.codeRecord.code);
             updateSummary();
-            setStatus("No fue posible consumir el giro. El codigo pudo cambiar en otra sesion.", "error");
+            setStatus(
+              "No fue posible consumir el giro. El codigo pudo cambiar en otra sesion.",
+              "error",
+            );
             return;
           }
-
           state.codeRecord = updatedRecord;
           updateSummary();
 
           const prize = pickPrize();
-          spinWheel(prize.index);
-          setStatus("Girando ruleta...", "ok");
+          setStatus("¡Girando la ruleta!", "ok");
 
-          window.setTimeout(() => {
+          /* Girar canvas y mostrar resultado al terminar */
+          spinWheel(prize.index, () => {
+            const isWin = !prize.label
+              .toLowerCase()
+              .includes("sigue participando");
+
             refs.resultBox.innerHTML = `
-              <strong>Resultado del giro</strong>
-              <span class="result-prize">${prize.name}</span><br />
-              Te quedan ${state.codeRecord.remaining_spins} giro(s) disponibles.
+              <strong>Resultado del giro</strong><br/>
+              <span class="result-prize">${prize.label}</span><br />
+              Te quedan <strong>${state.codeRecord.remaining_spins}</strong> giro(s) disponibles.
             `;
-
             setStatus(
               state.codeRecord.remaining_spins > 0
                 ? "Giro aplicado correctamente. Si aun tienes saldo, puedes volver a girar."
@@ -726,10 +1171,9 @@
               "ok",
             );
 
-            state.isSpinning = false;
-            refs.validateBtn.disabled = false;
-            updateSummary();
-          }, 5200);
+            showModal(prize.label, PRIZE_EMOJI[prize.index], isWin);
+            /* isSpinning y botones se re-habilitan al cerrar el modal (closeModal) */
+          });
         } catch (error) {
           state.isSpinning = false;
           refs.validateBtn.disabled = false;
@@ -738,11 +1182,15 @@
         }
       });
 
+      /* ════════════════════════════════════════════════
+         INICIALIZACIÓN
+      ════════════════════════════════════════════════ */
       function updateConfigBox() {
         refs.configBox.style.display = supabaseReady ? "none" : "block";
       }
 
-      renderWheelLabels();
+      window.addEventListener("resize", initWheel);
+      initWheel();
       updateConfigBox();
     </script>
   </body>
