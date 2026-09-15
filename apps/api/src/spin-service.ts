@@ -66,6 +66,8 @@ export async function redeemSpin(
         },
         remainingSpins: previous[0].remaining_spins,
         targetSegment: previous[0].target_segment,
+        mode: 'redeem',
+        verificationPath: `/api/v1/spins/results/${previous[0].id}`,
       };
 
     const codes = await tx<
@@ -98,6 +100,65 @@ export async function redeemSpin(
       prize: { id: prize.id, label: prize.label, emoji: prize.emoji },
       remainingSpins,
       targetSegment,
+      mode: 'redeem',
+      verificationPath: `/api/v1/spins/results/${inserted[0]!.id}`,
     };
   });
+}
+
+export async function createDemoSpin(sql: Sql): Promise<SpinRedeemResponse> {
+  return sql.begin(async (tx) => {
+    const prizeRows = await tx<PrizeRow[]>`
+      select id, label, emoji, weight, inventory, target_segments
+      from prizes where active = true`;
+    const prize = chooseWeightedPrize(prizeRows);
+    const targetSegment = prize.target_segments.length
+      ? prize.target_segments[randomInt(prize.target_segments.length)]!
+      : 0;
+    const inserted = await tx<{ id: string }[]>`
+      insert into demo_spin_results (prize_id, prize_label, target_segment)
+      values (${prize.id}, ${prize.label}, ${targetSegment}) returning id`;
+    const resultId = inserted[0]!.id;
+    return {
+      redemptionId: resultId,
+      prize: { id: prize.id, label: prize.label, emoji: prize.emoji },
+      remainingSpins: 0,
+      targetSegment,
+      mode: 'demo',
+      verificationPath: `/api/v1/spins/results/${resultId}`,
+    };
+  });
+}
+
+export async function lookupSpinResult(sql: Sql, id: string) {
+  const demos = await sql<{ id: string; prize_label: string; emoji: string; created_at: Date }[]>`
+    select d.id, d.prize_label, p.emoji, d.created_at
+    from demo_spin_results d join prizes p on p.id=d.prize_id
+    where d.id=${id} limit 1`;
+  if (demos[0]) {
+    return {
+      id: demos[0].id,
+      status: 'demo' as const,
+      redeemable: false,
+      label: 'Tirada de prueba — no canjeable',
+      displayedPrize: `${demos[0].emoji} ${demos[0].prize_label}`,
+      createdAt: demos[0].created_at.toISOString(),
+    };
+  }
+
+  const redemptions = await sql<
+    { id: string; prize_label: string; emoji: string; created_at: Date }[]
+  >`
+    select r.id, r.prize_label, p.emoji, r.created_at
+    from spin_redemptions r join prizes p on p.id=r.prize_id
+    where r.id=${id} limit 1`;
+  if (!redemptions[0]) return null;
+  return {
+    id: redemptions[0].id,
+    status: 'recorded' as const,
+    redeemable: true,
+    label: 'Premio registrado',
+    displayedPrize: `${redemptions[0].emoji} ${redemptions[0].prize_label}`,
+    createdAt: redemptions[0].created_at.toISOString(),
+  };
 }

@@ -95,6 +95,8 @@ export const spinRedeemResponseSchema = z.object({
   prize: z.object({ id: z.string(), label: z.string(), emoji: z.string() }),
   remainingSpins: z.number().int().nonnegative(),
   targetSegment: z.number().int().nonnegative(),
+  mode: z.enum(['redeem', 'demo']).default('redeem'),
+  verificationPath: z.string(),
 });
 
 export type Category = z.infer<typeof categorySchema>;

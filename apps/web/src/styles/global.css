@@ -1066,6 +1066,32 @@ textarea:focus-visible {
   cursor: wait;
   opacity: 0.7;
 }
+.demo-spin-panel {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+.demo-spin-panel > span {
+  color: var(--cream);
+  font-weight: 700;
+}
+.demo-spin-panel small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.demo-spin-button {
+  min-height: 48px;
+  border: 1px solid var(--gold);
+  background: transparent;
+  color: var(--gold-soft);
+  cursor: pointer;
+  font-family: var(--condensed);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .spin {
   animation: rotate 1s linear infinite;
 }
@@ -1142,12 +1168,67 @@ textarea:focus-visible {
   text-align: center;
 }
 .result-dialog {
+  position: relative;
   width: min(520px, calc(100% - 1.5rem));
   padding: 2.5rem;
   border: 2px solid var(--gold);
   background: var(--ink-soft);
   color: var(--cream);
   text-align: center;
+}
+.result-dialog > div {
+  position: relative;
+  z-index: 1;
+}
+.result-dialog.demo-result {
+  overflow: hidden;
+  border-color: var(--red);
+  outline: 2px solid var(--gold);
+  outline-offset: -10px;
+}
+.result-dialog.demo-result::before {
+  content: 'PRUEBA';
+  position: absolute;
+  inset: 35% auto auto 50%;
+  color: rgba(220, 23, 50, 0.14);
+  font-family: var(--condensed);
+  font-size: 7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  transform: translate(-50%, -50%) rotate(-24deg);
+}
+.demo-watermark {
+  width: fit-content;
+  margin: 0 auto 1rem;
+  padding: 0.45rem 0.7rem;
+  border: 2px solid var(--red);
+  color: var(--red);
+  font-family: var(--condensed);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  transform: rotate(-2deg);
+}
+.demo-warning {
+  padding: 0.8rem;
+  border: 1px solid var(--red);
+  background: rgba(220, 23, 50, 0.1);
+  line-height: 1.5;
+}
+.verification-proof {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.verification-proof code {
+  overflow-wrap: anywhere;
+  color: var(--gold-soft);
+}
+.verification-proof a {
+  color: var(--gold);
+  font-weight: 700;
 }
 .result-dialog .icon-button {
   position: absolute;

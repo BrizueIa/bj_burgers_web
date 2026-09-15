@@ -119,6 +119,16 @@ export const spinRedemptions = pgTable(
   (table) => [uniqueIndex('spin_redemptions_idempotency_unique').on(table.idempotencyKey)],
 );
 
+export const demoSpinResults = pgTable('demo_spin_results', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prizeId: text('prize_id')
+    .notNull()
+    .references(() => prizes.id),
+  prizeLabel: text('prize_label').notNull(),
+  targetSegment: integer('target_segment').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const adminUsers = pgTable('admin_users', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: text('email').notNull().unique(),

@@ -2,12 +2,13 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import { z } from 'zod';
 import { spinRedeemRequestSchema } from '@bj/contracts';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db/client.js';
 import { loadCatalog } from './catalog-repository.js';
 import { registerAdmin } from './admin-routes.js';
-import { redeemSpin, SpinError } from './spin-service.js';
+import { createDemoSpin, lookupSpinResult, redeemSpin, SpinError } from './spin-service.js';
 
 export async function buildApp(env = process.env) {
   const config = loadConfig(env);
@@ -101,6 +102,24 @@ export async function buildApp(env = process.env) {
       }
     },
   );
+
+  app.post(
+    '/api/v1/spins/demo',
+    { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } },
+    async (_request, reply) => {
+      const result = await createDemoSpin(database.sql);
+      reply.header('cache-control', 'no-store');
+      return result;
+    },
+  );
+
+  app.get('/api/v1/spins/results/:id', async (request, reply) => {
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const result = await lookupSpinResult(database.sql, id);
+    reply.header('cache-control', 'no-store');
+    if (!result) return reply.code(404).send({ message: 'Resultado no encontrado.' });
+    return result;
+  });
 
   await registerAdmin(app, database, config);
   app.setErrorHandler((error, _request, reply) => {

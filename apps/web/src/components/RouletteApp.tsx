@@ -16,6 +16,25 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
     if (result) dialogRef.current?.showModal();
   }, [result]);
 
+  function finishSpin(parsed: SpinRedeemResponse) {
+    setRotation(
+      (current) =>
+        current + 1800 + (360 - (parsed.targetSegment % segments.length) * (360 / segments.length)),
+    );
+    window.setTimeout(
+      () => {
+        setResult(parsed);
+        setBusy(false);
+        setStatus(
+          parsed.mode === 'demo'
+            ? 'Prueba terminada. El resultado quedó registrado como no canjeable.'
+            : `Giro registrado. Te quedan ${parsed.remainingSpins} giro(s).`,
+        );
+      },
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 50 : 4200,
+    );
+  }
+
   async function redeem(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -34,25 +53,34 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
           typeof body.message === 'string' ? body.message : 'No pudimos validar el código.',
         );
       const parsed = spinRedeemResponseSchema.parse(body);
-      setRotation(
-        (current) =>
-          current +
-          1800 +
-          (360 - (parsed.targetSegment % segments.length) * (360 / segments.length)),
-      );
-      window.setTimeout(
-        () => {
-          setResult(parsed);
-          setBusy(false);
-          setStatus(`Giro registrado. Te quedan ${parsed.remainingSpins} giro(s).`);
-        },
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 50 : 4200,
-      );
+      finishSpin(parsed);
     } catch (error) {
       setBusy(false);
       setStatus(error instanceof Error ? error.message : 'No pudimos completar el canje.');
     }
   }
+
+  async function demoSpin() {
+    setBusy(true);
+    setResult(null);
+    setStatus('Preparando una tirada de prueba segura…');
+    try {
+      const response = await fetch(`${apiBaseUrl}/spins/demo`, { method: 'POST' });
+      const body = await response.json();
+      if (!response.ok)
+        throw new Error(
+          typeof body.message === 'string' ? body.message : 'No pudimos iniciar la prueba.',
+        );
+      finishSpin(spinRedeemResponseSchema.parse(body));
+    } catch (error) {
+      setBusy(false);
+      setStatus(error instanceof Error ? error.message : 'No pudimos completar la prueba.');
+    }
+  }
+
+  const verificationUrl = result
+    ? `${apiBaseUrl.replace(/\/api\/v1\/?$/, '')}${result.verificationPath}`
+    : '';
 
   return (
     <section className="roulette-app">
@@ -81,6 +109,13 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
             {busy ? 'Girando…' : 'Girar ruleta'}
           </button>
         </form>
+        <div className="demo-spin-panel">
+          <span>¿Quieres ver cómo funciona?</span>
+          <button type="button" className="demo-spin-button" disabled={busy} onClick={demoSpin}>
+            Probar sin código
+          </button>
+          <small>La prueba no consume código y nunca genera un premio canjeable.</small>
+        </div>
         <p className="roulette-status" role="status" aria-live="polite">
           {status}
         </p>
@@ -111,9 +146,18 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
           El resultado del giro también se anunciará como texto en un diálogo accesible.
         </p>
       </div>
-      <dialog className="result-dialog" ref={dialogRef} onClose={() => setResult(null)}>
+      <dialog
+        className={`result-dialog ${result?.mode === 'demo' ? 'demo-result' : ''}`}
+        ref={dialogRef}
+        onClose={() => setResult(null)}
+      >
         {result && (
           <div>
+            {result.mode === 'demo' && (
+              <div className="demo-watermark" aria-hidden="true">
+                PRUEBA · NO CANJEABLE
+              </div>
+            )}
             <button
               className="icon-button"
               onClick={() => dialogRef.current?.close()}
@@ -124,10 +168,25 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
             <span className="result-emoji" aria-hidden="true">
               {result.prize.emoji}
             </span>
-            <p className="eyebrow">Resultado registrado</p>
+            <p className="eyebrow">
+              {result.mode === 'demo' ? 'Simulación registrada' : 'Resultado registrado'}
+            </p>
             <h2>¡{result.prize.label}!</h2>
-            <p>
-              Te quedan <strong>{result.remainingSpins}</strong> giro(s) disponibles.
+            {result.mode === 'demo' ? (
+              <p className="demo-warning">
+                Este resultado es una <strong>prueba sin valor</strong>. No genera premio ni puede
+                canjearse.
+              </p>
+            ) : (
+              <p>
+                Te quedan <strong>{result.remainingSpins}</strong> giro(s) disponibles.
+              </p>
+            )}
+            <p className="verification-proof">
+              Identificador: <code>{result.redemptionId}</code>
+              <a href={verificationUrl} target="_blank" rel="noreferrer">
+                Verificar en servidor
+              </a>
             </p>
             <button className="button primary" onClick={() => dialogRef.current?.close()}>
               Entendido

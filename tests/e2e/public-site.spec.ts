@@ -35,6 +35,8 @@ test('la ruleta solo muestra el resultado que devuelve la API', async ({ page })
         prize: { id: 'descuento-10', label: '10% de descuento', emoji: '🏷️' },
         remainingSpins: 0,
         targetSegment: 0,
+        mode: 'redeem',
+        verificationPath: '/api/v1/spins/results/5e14e18e-0089-4f34-8938-826b7280784b',
       }),
     }),
   );
@@ -43,4 +45,27 @@ test('la ruleta solo muestra el resultado que devuelve la API', async ({ page })
   await page.getByRole('button', { name: 'Girar ruleta' }).click();
   await expect(page.getByRole('dialog')).toContainText('10% de descuento');
   await expect(page.getByRole('status')).toContainText('0 giro');
+});
+
+test('la tirada de prueba queda marcada y verificable como no canjeable', async ({ page }) => {
+  await page.route('**/api/v1/spins/demo', async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        redemptionId: '3f1a052d-34c4-4be3-bcad-3125f6cf7c31',
+        prize: { id: 'descuento-20', label: '20% de descuento', emoji: '🎉' },
+        remainingSpins: 0,
+        targetSegment: 9,
+        mode: 'demo',
+        verificationPath: '/api/v1/spins/results/3f1a052d-34c4-4be3-bcad-3125f6cf7c31',
+      }),
+    }),
+  );
+  await page.goto('/ruleta');
+  await page.getByRole('button', { name: 'Probar sin código' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('PRUEBA · NO CANJEABLE');
+  await expect(dialog).toContainText('prueba sin valor');
+  await expect(dialog.getByRole('link', { name: 'Verificar en servidor' })).toBeVisible();
 });
