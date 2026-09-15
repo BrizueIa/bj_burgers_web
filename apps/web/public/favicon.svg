@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="30" fill="#080a08" stroke="#f2bd63" stroke-width="3"/>
+  <path d="M22 14l5 5 5-10 5 10 5-5-2 12H24z" fill="#f2bd63"/>
+  <text x="32" y="46" text-anchor="middle" font-family="Arial Black,Arial" font-size="19" fill="#fffaf0">B&amp;J</text>
+</svg>

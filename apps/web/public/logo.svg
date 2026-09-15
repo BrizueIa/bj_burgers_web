@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">B&amp;J Burgers</title>
+  <desc id="desc">Logotipo circular negro y dorado de B&amp;J Burgers con una corona.</desc>
+  <defs>
+    <linearGradient id="gold" x1="0" x2="1">
+      <stop stop-color="#f3bd61"/><stop offset=".5" stop-color="#ffe39a"/><stop offset="1" stop-color="#d9982e"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="244" fill="#070907" stroke="#050505" stroke-width="12"/>
+  <circle cx="256" cy="256" r="222" fill="none" stroke="url(#gold)" stroke-width="12"/>
+  <path d="M192 120l32 30 32-58 32 58 32-30-10 69H202z" fill="url(#gold)"/>
+  <rect x="204" y="198" width="104" height="10" rx="5" fill="url(#gold)"/>
+  <text x="256" y="327" text-anchor="middle" font-family="Arial Black,Arial,sans-serif" font-size="132" font-weight="900" fill="#fffaf0">B&amp;J</text>
+  <rect x="112" y="348" width="288" height="8" fill="#ef233c"/>
+  <text x="256" y="410" text-anchor="middle" font-family="Arial,sans-serif" font-size="42" font-weight="700" letter-spacing="16" fill="url(#gold)">BURGERS</text>
+</svg>

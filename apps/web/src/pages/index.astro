@@ -1,0 +1,56 @@
+---
+import { activePromotion, seedCatalog } from '@bj/contracts';
+import SiteLayout from '../layouts/SiteLayout.astro';
+import PromoCard from '../components/PromoCard.astro';
+import StoreStatus from '../components/StoreStatus';
+
+const featured = seedCatalog.products.filter((product) => product.featured).slice(0, 3);
+const todayPromo = activePromotion(seedCatalog);
+const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100/api/v1';
+---
+
+<SiteLayout title="B&J Burgers | Más que burgers, es un plan" description="Hamburguesas y hot dogs con entrega en Canarios y zonas cercanas de Altamira. Arma tu pedido y envíalo por WhatsApp." currentPath="/">
+  <section class="hero-section">
+    <div class="hero-copy">
+      <StoreStatus client:load apiBaseUrl={apiBaseUrl} />
+      <p class="eyebrow"><span>Desde siempre</span> buenas burgers</p>
+      <h1>Más que burgers,<br /><em>es un plan.</em></h1>
+      <p class="hero-lead">Hamburguesas, hot dogs y promociones para cerrar la semana como se debe.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="/menu">Ver el menú</a>
+        <a class="button ghost" href="https://wa.me/528333514381">WhatsApp</a>
+      </div>
+    </div>
+    <div class="hero-mark" aria-label="B&J Burgers">
+      <div class="lamp-line" aria-hidden="true"></div>
+      <img src="/logo.svg" alt="B&J Burgers" width="460" height="460" />
+      <p>Sabor que siempre regresa</p>
+    </div>
+  </section>
+
+  <section class="service-strip" aria-label="Información de servicio">
+    <div><span class="fact-number">01</span><p><strong>Jueves a domingo</strong><br />6:00 pm — 11:55 pm</p></div>
+    <div><span class="fact-number">02</span><p><strong>Entrega gratis</strong><br />en Canarios</p></div>
+    <div><span class="fact-number">03</span><p><strong>Pedido sencillo</strong><br />directo a WhatsApp</p></div>
+  </section>
+
+  {todayPromo && <section class="today-promo"><p class="eyebrow">El plan de hoy</p><h2>{todayPromo.name}</h2><p>{todayPromo.shortDescription}</p><a href="/menu">Aprovechar promoción →</a></section>}
+
+  <section class="home-section">
+    <header class="section-heading"><p class="eyebrow">Los favoritos</p><h2>Elige tu próximo plan</h2><a href="/menu">Ver menú completo</a></header>
+    <div class="feature-grid">
+      {featured.map((product, index) => <article class="feature-card"><span>0{index + 1}</span><h3>{product.name}</h3><p>{product.description}</p><strong>${product.priceCents / 100}</strong><a href={`/menu#${product.id}`}>Agregar al pedido</a></article>)}
+    </div>
+  </section>
+
+  <section class="home-section promo-section">
+    <header class="section-heading"><p class="eyebrow">Promociones de la semana</p><h2>De jueves a domingo</h2></header>
+    <div class="promo-grid">{seedCatalog.promotions.map((promo) => <PromoCard promo={promo} />)}</div>
+    <p class="fine-print">Promociones no acumulables y sujetas a disponibilidad.</p>
+  </section>
+
+  <section class="roulette-teaser">
+    <div><p class="eyebrow">¿Tienes un código?</p><h2>Hazlo girar.</h2><p>Canjea tu código y descubre tu premio. El resultado queda registrado de forma segura.</p></div>
+    <a class="button primary" href="/ruleta">Ir a la ruleta</a>
+  </section>
+</SiteLayout>

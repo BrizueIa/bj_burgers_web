@@ -1,15 +1,18 @@
+node_modules/
+dist/
+.astro/
+coverage/
+playwright-report/
+test-results/
+artifacts-*.png
+lighthouse-*.json
 .env
-
-| Premio                                    | Probabilidad |
-| ----------------------------------------- | ------------ |
-| 😢 Sigue participando / sin premio        |          35% |
-| 10% descuento próxima compra              |          18% |
-| 15% descuento próxima compra              |          10% |
-| Refresco con 50% descuento                |          10% |
-| 1 extra gratis                            |          10% |
-|  Porcion de papas gratis                  |           5% |
-| Orden de papas al 50%                     |           4% |
-| Orden de papas gratis                     |           3% |
-| 20% descuento próxima compra              |           3% |
-| Hot dog clásico gratis                    |           1% |
-| Hamburguesa clásica gratis                |           1% |
+.env.*
+!.env.example
+*.log
+.DS_Store
+.wrangler/
+.turbo/
+backups/
+tmp/
+*.csv

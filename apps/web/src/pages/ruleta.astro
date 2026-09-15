@@ -1,0 +1,14 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import RouletteApp from '../components/RouletteApp';
+const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100/api/v1';
+---
+
+<SiteLayout title="Ruleta de regalos | B&J Burgers" description="Canjea tu código de B&J Burgers y descubre tu premio." currentPath="/ruleta">
+  <section class="page-intro compact">
+    <p class="eyebrow">Ruleta de regalos</p>
+    <h1>Tu código. Tu giro.</h1>
+    <p>Solo necesitas un código vigente. Cada giro se registra antes de mostrar el resultado.</p>
+  </section>
+  <RouletteApp client:load apiBaseUrl={apiBaseUrl} />
+</SiteLayout>

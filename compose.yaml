@@ -1,0 +1,60 @@
+name: bj-burgers
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bj_burgers
+      POSTGRES_USER: bj_burgers
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - bj_burgers_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bj_burgers -d bj_burgers']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - bj_burgers_private
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_URL: postgres://bj_burgers:${POSTGRES_PASSWORD}@db:5432/bj_burgers
+      WEB_ORIGINS: ${WEB_ORIGINS:?required}
+      PUBLIC_APP_ORIGIN: ${PUBLIC_APP_ORIGIN:?required}
+      CODE_HMAC_SECRET: ${CODE_HMAC_SECRET:?required}
+      SESSION_SECRET: ${SESSION_SECRET:?required}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?required}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?required}
+      CLOUDFLARE_DEPLOY_HOOK: ${CLOUDFLARE_DEPLOY_HOOK:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4100/health').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bj_burgers_private
+
+networks:
+  bj_burgers_private:
+    name: bj_burgers_private
+
+volumes:
+  bj_burgers_db:
+    name: bj_burgers_db

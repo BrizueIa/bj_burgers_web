@@ -1,0 +1,15 @@
+---
+import { seedCatalog } from '@bj/contracts';
+import SiteLayout from '../layouts/SiteLayout.astro';
+import MenuApp from '../components/MenuApp';
+const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100/api/v1';
+---
+
+<SiteLayout title="Menú | B&J Burgers" description="Consulta hamburguesas, hot dogs, complementos y bebidas. Personaliza tu pedido y envíalo por WhatsApp." currentPath="/menu">
+  <section class="page-intro">
+    <p class="eyebrow">El menú B&amp;J</p>
+    <h1>Arma tu plan.</h1>
+    <p>Elige, personaliza y envía. Confirmaremos disponibilidad y entrega por WhatsApp.</p>
+  </section>
+  <MenuApp client:load initialCatalog={seedCatalog} apiBaseUrl={apiBaseUrl} />
+</SiteLayout>

@@ -1,0 +1,12 @@
+---
+import type { Promotion } from '@bj/contracts';
+const { promo } = Astro.props as { promo: Promotion };
+---
+
+<article class="promo-card">
+  <span class="promo-day">{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'][promo.daysOfWeek[0] ?? 0]}</span>
+  <div>
+    <h3>{promo.name}</h3>
+    <p>{promo.shortDescription}</p>
+  </div>
+</article>

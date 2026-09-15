@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/wrangler.json",
+  "name": "bj-burgers",
+  "compatibility_date": "2026-09-15",
+  "pages_build_output_dir": "./dist",
+}

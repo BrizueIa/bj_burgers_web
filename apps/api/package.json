@@ -1,0 +1,39 @@
+{
+  "name": "@bj/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src scripts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "admin:hash": "tsx scripts/hash-password.ts",
+    "codes:import": "tsx scripts/import-spin-codes.ts"
+  },
+  "dependencies": {
+    "@bj/contracts": "workspace:*",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^8.3.0",
+    "@node-rs/argon2": "^2.0.2",
+    "csv-parse": "^6.1.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.12.4",
+    "postgres": "^3.4.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

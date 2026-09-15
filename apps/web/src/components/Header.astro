@@ -1,0 +1,20 @@
+---
+const { currentPath } = Astro.props;
+const links = [
+  { href: '/', label: 'Inicio' },
+  { href: '/menu', label: 'Menú' },
+  { href: '/ruleta', label: 'Ruleta' },
+];
+---
+
+<header class="site-header">
+  <a class="brand-link" href="/" aria-label="B&J Burgers, inicio">
+    <img src="/logo.svg" alt="" width="64" height="64" />
+    <span><strong>B&amp;J</strong><small>Burgers</small></span>
+  </a>
+  <nav aria-label="Navegación principal">
+    {links.map((link) => <a href={link.href} aria-current={currentPath === link.href ? 'page' : undefined}>{link.label}</a>)}
+  </nav>
+  <a class="header-order" href="/menu#ordenar">Ordenar</a>
+</header>
+<div class="checker" aria-hidden="true"></div>
