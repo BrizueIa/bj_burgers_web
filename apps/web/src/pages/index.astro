@@ -2,7 +2,6 @@
 import { activePromotion, seedCatalog } from '@bj/contracts';
 import SiteLayout from '../layouts/SiteLayout.astro';
 import PromoCard from '../components/PromoCard.astro';
-import StoreStatus from '../components/StoreStatus';
 
 const featured = seedCatalog.products.filter((product) => product.featured).slice(0, 3);
 const todayPromo = activePromotion(seedCatalog);
@@ -12,7 +11,7 @@ const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100
 <SiteLayout title="B&J Burgers | Más que burgers, es un plan" description="Hamburguesas y hot dogs con entrega en Canarios y zonas cercanas de Altamira. Arma tu pedido y envíalo por WhatsApp." currentPath="/">
   <section class="hero-section">
     <div class="hero-copy">
-      <StoreStatus client:load apiBaseUrl={apiBaseUrl} />
+      <div class="live-status" data-store-status data-api-base={apiBaseUrl} role="status" aria-live="polite"><span></span><b>Jueves a domingo · 6:00 pm a 11:55 pm</b></div>
       <p class="eyebrow"><span>Desde siempre</span> buenas burgers</p>
       <h1>Más que burgers,<br /><em>es un plan.</em></h1>
       <p class="hero-lead">Hamburguesas, hot dogs y promociones para cerrar la semana como se debe.</p>
@@ -54,3 +53,17 @@ const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100
     <a class="button primary" href="/ruleta">Ir a la ruleta</a>
   </section>
 </SiteLayout>
+
+<script>
+  const status = document.querySelector<HTMLElement>('[data-store-status]');
+  if (status) {
+    fetch(`${status.dataset.apiBase}/store-status`)
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then((value: { open: boolean; message: string }) => {
+        status.classList.toggle('open', value.open);
+        const label = status.querySelector('b');
+        if (label) label.textContent = value.message;
+      })
+      .catch(() => {});
+  }
+</script>
