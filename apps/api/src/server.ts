@@ -36,7 +36,11 @@ export async function buildApp(env = process.env) {
   await app.register(cors, {
     credentials: true,
     origin(origin, callback) {
-      if (!origin || config.webOrigins.includes(origin)) callback(null, true);
+      // The admin SPA is served by this API under /admin. Vite marks its
+      // generated assets as CORS requests, so the application's own HTTPS
+      // origin must be explicitly allowed alongside the public Pages sites.
+      if (!origin || config.webOrigins.includes(origin) || origin === config.PUBLIC_APP_ORIGIN)
+        callback(null, true);
       else callback(new Error('Origin no permitido'), false);
     },
   });
