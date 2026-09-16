@@ -11,7 +11,7 @@ Los previews deben usar el mismo API. Añadir sus orígenes exactos a `WEB_ORIGI
 
 ## Aislamiento en Dockploy
 
-Crear un proyecto nuevo llamado `bj-burgers`; no reutilizar redes, volúmenes ni variables del servicio de correo. El stack solo publica el contenedor `api` mediante el proxy administrado por Dockploy. PostgreSQL permanece en la red privada.
+Crear un proyecto nuevo llamado `bj-burgers`; no reutilizar volúmenes ni variables del servicio de correo. PostgreSQL permanece solo en `bj_burgers_private`. La API se conecta también a `dokploy-network` exclusivamente para recibir tráfico de Traefik, sin publicar puertos del host.
 
 Hostname provisional recomendado: `bj-<ip-publica-con-guiones>.sslip.io`. Configurar la ruta `/` hacia el puerto interno `4100`; el API vive en `/api/v1` y el panel compilado en `/admin`.
 
@@ -28,31 +28,28 @@ Hostname provisional recomendado: `bj-<ip-publica-con-guiones>.sslip.io`. Config
 
 Generar el hash del administrador con `pnpm --filter @bj/api admin:hash -- "contraseña"`. No conservar la contraseña en variables después de crear la cuenta.
 
-Después del primer despliegue, abrir la consola del contenedor API y ejecutar:
+Después del primer despliegue, abrir la consola del contenedor API y ejecutar una sola vez:
 
 ```sh
 pnpm --filter @bj/api db:migrate
 pnpm --filter @bj/api db:seed
 ```
 
-El proxy de Dockploy debe apuntar al puerto interno `4100`. No publicar el puerto de PostgreSQL y no unir `bj_burgers_private` a ninguna red del correo.
+El dominio nativo de Dockploy debe apuntar al servicio `api`, puerto interno `4100`, con HTTPS. Revisar `Preview Compose` antes de desplegar para confirmar que solo la API se agrega al proxy. No publicar el puerto de PostgreSQL y no unir `bj_burgers_private` a ninguna red del correo.
+
+La semilla es de solo inserción: si ya existe un registro, no modifica ajustes hechos desde el panel ni la contraseña del administrador. No usarla como mecanismo para cambiar datos existentes.
 
 ## Migración y salida
 
-1. Exportar `spin_codes` desde Supabase a CSV y conservar una copia cifrada.
-2. Ejecutar migraciones y semilla.
-3. Importar con `pnpm --filter @bj/api codes:import -- ruta/al/archivo.csv`.
-4. Comparar cantidad de códigos, activos y suma de giros antes del corte.
-5. Desplegar una preview de Cloudflare y ejecutar las pruebas E2E.
-6. Mantener Supabase en solo lectura hasta validar los primeros canjes.
+No hay códigos vigentes que importar. Ejecutar migraciones y semilla, confirmar que la ruleta de prueba no es canjeable y crear códigos reales nuevos solo después de validar respaldos. Desplegar una preview de Cloudflare y ejecutar las pruebas E2E antes del cambio productivo.
 
 ## Respaldo
 
-Programar `scripts/backup-postgres.ps1` o su equivalente Linux para ejecutar `pg_dump`, cifrar el archivo, copiarlo fuera del volumen principal y borrar copias con más de 14 días. Realizar una restauración de prueba antes del lanzamiento.
+Crear un bucket privado `bj-burgers-backups` en Oracle Object Storage, región Monterrey, con una regla de ciclo de vida que elimine objetos después de 14 días. Usar un usuario/clave API dedicado con permisos limitados a este bucket; no reutilizar credenciales de otros servicios.
 
-En Linux, `scripts/backup-postgres.sh` requiere `DATABASE_URL`, `BACKUP_DESTINATION` y `BACKUP_ENCRYPTION_PASSWORD`. El destino debe ser un montaje o almacenamiento externo a `bj_burgers_db`. Programarlo diariamente y vigilar su código de salida.
+En el host, `scripts/backup-postgres.sh` toma `pg_dump` exclusivamente del contenedor `bj-burgers-db`, cifra el flujo sin escribir un dump en claro y lo sube con la imagen oficial de OCI CLI. Requiere `BACKUP_DESTINATION`, `BACKUP_ENCRYPTION_PASSWORD_FILE`, `OCI_CONFIG_DIR`, `OCI_NAMESPACE`, `OCI_BUCKET_NAME` y `OCI_CLI_IMAGE` fijada por digest. Guardar los secretos fuera del repositorio, restringidos a root; programar el script diariamente y alertar si falla. El archivo local cifrado solo se borra después de verificar el objeto remoto.
 
-Antes del lanzamiento, descifrar una copia en un entorno temporal, restaurarla con `pg_restore --clean --if-exists --no-owner` y comparar conteos de productos, códigos, saldo total y canjes. El archivo descifrado debe borrarse al terminar la prueba.
+Antes del lanzamiento, descargar una copia en un entorno temporal, descifrarla y restaurarla en una base temporal de B&J. Comparar conteos de productos, códigos, saldo total y canjes; borrar el dump descifrado al terminar. No usar las funciones de restauración global de Dokploy, pues afectarían otros proyectos.
 
 ## Rollback
 

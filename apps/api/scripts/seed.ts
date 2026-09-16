@@ -102,31 +102,31 @@ async function seed() {
     for (const category of seedCatalog.categories) {
       await tx`insert into categories (id, slug, name, description, sort_order, active)
         values (${category.id}, ${category.slug}, ${category.name}, ${category.description}, ${category.order}, ${category.active})
-        on conflict (id) do update set slug=excluded.slug, name=excluded.name, description=excluded.description, sort_order=excluded.sort_order, active=excluded.active, updated_at=now()`;
+        on conflict (id) do nothing`;
     }
     await tx`insert into modifier_groups (id, name, minimum_selections, maximum_selections, active)
       values ('extras', 'Extras', 0, null, true)
-      on conflict (id) do update set name=excluded.name, active=true, updated_at=now()`;
+      on conflict (id) do nothing`;
     for (const product of seedCatalog.products) {
       await tx`insert into products (id, slug, category_id, name, description, price_cents, ingredients, removable_ingredients, combo_eligible, featured, available, sort_order)
         values (${product.id}, ${product.slug}, ${product.categoryId}, ${product.name}, ${product.description}, ${product.priceCents}, ${tx.json(product.ingredients)}, ${tx.json(product.removableIngredients)}, ${product.comboEligible}, ${product.featured}, ${product.available}, ${product.order})
-        on conflict (id) do update set slug=excluded.slug, category_id=excluded.category_id, name=excluded.name, description=excluded.description, price_cents=excluded.price_cents, ingredients=excluded.ingredients, removable_ingredients=excluded.removable_ingredients, combo_eligible=excluded.combo_eligible, featured=excluded.featured, available=excluded.available, sort_order=excluded.sort_order, updated_at=now()`;
+        on conflict (id) do nothing`;
     }
     for (const modifier of seedCatalog.modifiers) {
       await tx`insert into modifiers (id, group_id, name, price_cents, available) values (${modifier.id}, 'extras', ${modifier.name}, ${modifier.priceCents}, ${modifier.available})
-        on conflict (id) do update set group_id='extras', name=excluded.name, price_cents=excluded.price_cents, available=excluded.available, updated_at=now()`;
+        on conflict (id) do nothing`;
     }
     for (const promotion of seedCatalog.promotions) {
       await tx`insert into promotions (id, name, short_description, days_of_week, starts_at, ends_at, priority, active, rule)
         values (${promotion.id}, ${promotion.name}, ${promotion.shortDescription}, ${tx.json(promotion.daysOfWeek)}, ${promotion.startsAt}, ${promotion.endsAt}, ${promotion.priority}, ${promotion.active}, ${tx.json(promotion.rule)})
-        on conflict (id) do update set name=excluded.name, short_description=excluded.short_description, days_of_week=excluded.days_of_week, starts_at=excluded.starts_at, ends_at=excluded.ends_at, priority=excluded.priority, active=excluded.active, rule=excluded.rule, updated_at=now()`;
+        on conflict (id) do nothing`;
     }
     await tx`insert into business_settings (id, data) values ('primary', ${tx.json(seedCatalog.business)})
-      on conflict (id) do update set data=excluded.data, updated_at=now()`;
+      on conflict (id) do nothing`;
     for (const prize of defaultPrizes) {
       await tx`insert into prizes (id, label, emoji, weight, inventory, target_segments)
         values (${prize.id}, ${prize.label}, ${prize.emoji}, ${prize.weight}, ${prize.inventory}, ${tx.json(prize.targetSegments)})
-        on conflict (id) do update set label=excluded.label, emoji=excluded.emoji, weight=excluded.weight, target_segments=excluded.target_segments, updated_at=now()`;
+        on conflict (id) do nothing`;
     }
   });
 
@@ -137,7 +137,7 @@ async function seed() {
     (password ? await hash(password, { memoryCost: 65_536, timeCost: 3, parallelism: 1 }) : '');
   if (email && passwordHash) {
     await database.sql`insert into admin_users (email, password_hash) values (${email}, ${passwordHash})
-      on conflict (email) do update set password_hash=excluded.password_hash, active=true, updated_at=now()`;
+      on conflict (email) do nothing`;
     console.log(`Administrador configurado: ${email}`);
   } else {
     console.log(
