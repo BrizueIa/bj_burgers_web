@@ -21,6 +21,7 @@ export async function buildApp(env = process.env) {
 
   await app.register(helmet, {
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
