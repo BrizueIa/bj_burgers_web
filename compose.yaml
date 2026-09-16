@@ -59,6 +59,7 @@ services:
 networks:
   bj_burgers_private:
     name: bj_burgers_private
+    internal: true
   dokploy-network:
     external: true
 
