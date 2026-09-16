@@ -79,6 +79,9 @@ export async function buildApp(env = process.env) {
     const open =
       !catalog.business.temporarilyClosed &&
       Boolean(schedule && current >= schedule.opens && current <= schedule.closes);
+    const openingTime = catalog.business.schedule[0]?.opens;
+    const [openingHour = 18, openingMinute = 0] = openingTime?.split(':').map(Number) ?? [];
+    const openingLabel = `${openingHour % 12 || 12}:${String(openingMinute).padStart(2, '0')} ${openingHour >= 12 ? 'pm' : 'am'}`;
     reply.header('cache-control', 'public, max-age=30');
     return {
       open,
@@ -87,7 +90,7 @@ export async function buildApp(env = process.env) {
         ? catalog.business.closureMessage
         : open
           ? 'Estamos recibiendo pedidos'
-          : 'Abrimos de jueves a domingo a las 6:00 pm',
+          : `Abrimos de jueves a domingo a las ${openingLabel}`,
       schedule: catalog.business.schedule,
       timezone: catalog.business.timezone,
     };
