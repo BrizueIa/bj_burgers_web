@@ -11,6 +11,7 @@ interface Props {
 
 const { title, description, currentPath = '/' } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:4100/api/v1';
 const restaurantSchema = {
   '@context': 'https://schema.org',
   '@type': 'Restaurant',
@@ -43,10 +44,53 @@ const restaurantSchema = {
     <script is:inline type="application/ld+json" set:html={JSON.stringify(restaurantSchema)} />
     <title>{title}</title>
   </head>
-  <body>
+  <body data-api-base={apiBaseUrl}>
     <a class="skip-link" href="#contenido">Saltar al contenido</a>
     <Header currentPath={currentPath} />
     <main id="contenido"><slot /></main>
     <Footer />
+    <script>
+      type StoreStatus = {
+        open: boolean;
+        message: string;
+        schedule: Array<{ dayOfWeek: number; opens: string; closes: string }>;
+      };
+
+      const apiBase = document.body.dataset.apiBase;
+      const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+      const formatTime = (value: string) => {
+        const [hour, minute] = value.split(':').map(Number);
+        const normalizedHour = hour % 12 || 12;
+        return `${normalizedHour}:${String(minute).padStart(2, '0')} ${hour >= 12 ? 'pm' : 'am'}`;
+      };
+      const describeDays = (schedule: StoreStatus['schedule']) => {
+        const days = schedule.map((slot) => slot.dayOfWeek);
+        if (days.join(',') === '4,5,6,0') return 'Jueves a domingo';
+        return days.map((day) => dayNames[day]).join(', ');
+      };
+
+      if (apiBase) {
+        fetch(`${apiBase}/store-status`, { cache: 'no-store' })
+          .then((response) => (response.ok ? response.json() : Promise.reject(response)))
+          .then((value: StoreStatus) => {
+            const schedule = value.schedule;
+            if (!schedule.length) return;
+            const days = describeDays(schedule);
+            const hours = `${formatTime(schedule[0].opens)} — ${formatTime(schedule[0].closes)}`;
+            document.querySelectorAll<HTMLElement>('[data-business-days]').forEach((element) => {
+              element.textContent = days;
+            });
+            document.querySelectorAll<HTMLElement>('[data-business-hours]').forEach((element) => {
+              element.textContent = hours;
+            });
+            document.querySelectorAll<HTMLElement>('[data-store-status]').forEach((element) => {
+              element.classList.toggle('open', value.open);
+              const label = element.querySelector('b');
+              if (label) label.textContent = value.message;
+            });
+          })
+          .catch(() => {});
+      }
+    </script>
   </body>
 </html>
