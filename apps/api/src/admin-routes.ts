@@ -155,7 +155,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     if (!context) return;
     const id = (request.params as { id: string }).id;
     const product = productSchema.parse({ ...(request.body as object), id });
-    await database.sql`update products set slug=${product.slug}, category_id=${product.categoryId}, name=${product.name}, description=${product.description}, price_cents=${product.priceCents}, ingredients=${database.sql.json(product.ingredients)}, removable_ingredients=${database.sql.json(product.removableIngredients)}, combo_eligible=${product.comboEligible}, featured=${product.featured}, available=${product.available}, sort_order=${product.order}, updated_at=now() where id=${id}`;
+    await database.sql`update products set slug=${product.slug}, category_id=${product.categoryId}, name=${product.name}, description=${product.description}, price_cents=${product.priceCents}, ingredients=${JSON.stringify(product.ingredients)}, removable_ingredients=${JSON.stringify(product.removableIngredients)}, combo_eligible=${product.comboEligible}, featured=${product.featured}, available=${product.available}, sort_order=${product.order}, updated_at=now() where id=${id}`;
     await audit(database, context, 'update', 'product', id);
     await triggerDeploy(config);
     return { ok: true };
@@ -188,7 +188,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     if (!context) return;
     const id = (request.params as { id: string }).id;
     const promotion = promotionSchema.parse({ ...(request.body as object), id });
-    await database.sql`update promotions set name=${promotion.name}, short_description=${promotion.shortDescription}, days_of_week=${database.sql.json(promotion.daysOfWeek)}, starts_at=${promotion.startsAt}, ends_at=${promotion.endsAt}, priority=${promotion.priority}, active=${promotion.active}, rule=${database.sql.json(promotion.rule)}, updated_at=now() where id=${id}`;
+    await database.sql`update promotions set name=${promotion.name}, short_description=${promotion.shortDescription}, days_of_week=${JSON.stringify(promotion.daysOfWeek)}, starts_at=${promotion.startsAt}, ends_at=${promotion.endsAt}, priority=${promotion.priority}, active=${promotion.active}, rule=${JSON.stringify(promotion.rule)}, updated_at=now() where id=${id}`;
     await audit(database, context, 'update', 'promotion', id);
     await triggerDeploy(config);
     return { ok: true };
@@ -198,7 +198,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     const context = await protect(request, reply);
     if (!context) return;
     const settings = businessSettingsSchema.parse(request.body);
-    await database.sql`update business_settings set data=${database.sql.json(settings)}, updated_at=now() where id='primary'`;
+    await database.sql`update business_settings set data=${JSON.stringify(settings)}, updated_at=now() where id='primary'`;
     await audit(database, context, 'update', 'business', 'primary');
     await triggerDeploy(config);
     return { ok: true };
@@ -218,7 +218,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     };
     if (!body.label || !Number.isInteger(body.weight) || body.weight < 0)
       return reply.code(400).send({ message: 'Premio no válido.' });
-    await database.sql`update prizes set label=${body.label}, emoji=${body.emoji}, weight=${body.weight}, active=${body.active}, inventory=${body.inventory}, target_segments=${database.sql.json(body.targetSegments)}, updated_at=now() where id=${id}`;
+    await database.sql`update prizes set label=${body.label}, emoji=${body.emoji}, weight=${body.weight}, active=${body.active}, inventory=${body.inventory}, target_segments=${JSON.stringify(body.targetSegments)}, updated_at=now() where id=${id}`;
     await audit(database, context, 'update', 'prize', id);
     return { ok: true };
   });
