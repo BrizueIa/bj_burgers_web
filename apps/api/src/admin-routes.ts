@@ -227,6 +227,5 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
   if (existsSync(adminDist)) {
     await app.register(staticPlugin, { root: adminDist, prefix: '/admin/' });
     app.get('/admin', (_request, reply) => reply.redirect('/admin/'));
-    app.get('/admin/*', (_request, reply) => reply.sendFile('index.html', adminDist));
   }
 }
