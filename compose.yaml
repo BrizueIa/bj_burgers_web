@@ -3,7 +3,6 @@ name: bj-burgers
 services:
   db:
     image: postgres:17-alpine
-    container_name: bj-burgers-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: bj_burgers
@@ -23,7 +22,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bj-burgers-api
     restart: unless-stopped
     expose:
       - '4100'

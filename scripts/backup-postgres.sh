@@ -8,12 +8,17 @@ set -euo pipefail
 : "${OCI_NAMESPACE:?required}"
 : "${OCI_BUCKET_NAME:?required}"
 : "${OCI_CLI_IMAGE:?required: pin an OCI CLI image digest}"
+: "${COMPOSE_PROJECT_NAME:?required: B&J Compose project name}"
 
-DB_CONTAINER="${DB_CONTAINER:-bj-burgers-db}"
 umask 077
 mkdir -p -- "$BACKUP_DESTINATION"
 test -f "$BACKUP_ENCRYPTION_PASSWORD_FILE"
 test -f "$OCI_CONFIG_DIR/config"
+DB_CONTAINER="$(docker ps --quiet \
+  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --filter 'label=com.docker.compose.service=db')"
+test -n "$DB_CONTAINER"
+test "$(printf '%s\n' "$DB_CONTAINER" | wc -l)" -eq 1
 test "$(docker inspect --format '{{.State.Running}}' "$DB_CONTAINER")" = true
 
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
