@@ -5,6 +5,7 @@ import { createDatabase } from '../src/db/client.js';
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL es obligatoria.');
 const database = createDatabase(databaseUrl);
+const json = (value: unknown) => JSON.stringify(value);
 
 const defaultPrizes = [
   {
@@ -109,7 +110,7 @@ async function seed() {
       on conflict (id) do nothing`;
     for (const product of seedCatalog.products) {
       await tx`insert into products (id, slug, category_id, name, description, price_cents, ingredients, removable_ingredients, combo_eligible, featured, available, sort_order)
-        values (${product.id}, ${product.slug}, ${product.categoryId}, ${product.name}, ${product.description}, ${product.priceCents}, ${tx.json(product.ingredients)}, ${tx.json(product.removableIngredients)}, ${product.comboEligible}, ${product.featured}, ${product.available}, ${product.order})
+        values (${product.id}, ${product.slug}, ${product.categoryId}, ${product.name}, ${product.description}, ${product.priceCents}, ${json(product.ingredients)}, ${json(product.removableIngredients)}, ${product.comboEligible}, ${product.featured}, ${product.available}, ${product.order})
         on conflict (id) do nothing`;
     }
     for (const modifier of seedCatalog.modifiers) {
@@ -118,14 +119,14 @@ async function seed() {
     }
     for (const promotion of seedCatalog.promotions) {
       await tx`insert into promotions (id, name, short_description, days_of_week, starts_at, ends_at, priority, active, rule)
-        values (${promotion.id}, ${promotion.name}, ${promotion.shortDescription}, ${tx.json(promotion.daysOfWeek)}, ${promotion.startsAt}, ${promotion.endsAt}, ${promotion.priority}, ${promotion.active}, ${tx.json(promotion.rule)})
+        values (${promotion.id}, ${promotion.name}, ${promotion.shortDescription}, ${json(promotion.daysOfWeek)}, ${promotion.startsAt}, ${promotion.endsAt}, ${promotion.priority}, ${promotion.active}, ${json(promotion.rule)})
         on conflict (id) do nothing`;
     }
-    await tx`insert into business_settings (id, data) values ('primary', ${tx.json(seedCatalog.business)})
+    await tx`insert into business_settings (id, data) values ('primary', ${json(seedCatalog.business)})
       on conflict (id) do nothing`;
     for (const prize of defaultPrizes) {
       await tx`insert into prizes (id, label, emoji, weight, inventory, target_segments)
-        values (${prize.id}, ${prize.label}, ${prize.emoji}, ${prize.weight}, ${prize.inventory}, ${tx.json(prize.targetSegments)})
+        values (${prize.id}, ${prize.label}, ${prize.emoji}, ${prize.weight}, ${prize.inventory}, ${json(prize.targetSegments)})
         on conflict (id) do nothing`;
     }
   });
