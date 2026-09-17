@@ -159,7 +159,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     if (!name || name.length > 80)
       return reply.code(400).send({ message: 'Indica un nombre de hasta 80 caracteres.' });
     const pairingCode = createOpaqueToken(24);
-    const rows = await database.sql<{ id: string; pairing_expires_at: Date }[]>`
+    const rows = await database.sql<{ id: string; pairing_expires_at: Date | string }[]>`
       insert into mobile_devices (name, pairing_digest, pairing_expires_at, created_by_user_id)
       values (${name}, ${digestToken(pairingCode, config.SESSION_SECRET)}, now() + interval '15 minutes', ${context.userId})
       returning id, pairing_expires_at`;
@@ -168,7 +168,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       device: {
         id: rows[0]!.id,
         name,
-        pairingExpiresAt: rows[0]!.pairing_expires_at.toISOString(),
+        pairingExpiresAt: new Date(rows[0]!.pairing_expires_at).toISOString(),
       },
       pairingCode,
     };
