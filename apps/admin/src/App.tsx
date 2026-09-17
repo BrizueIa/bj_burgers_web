@@ -98,7 +98,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: 'include',
     ...options,
-    headers: { 'content-type': 'application/json', ...options.headers },
+    headers: {
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...options.headers,
+    },
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok)
@@ -893,11 +896,16 @@ function Devices({
   async function revoke(id: string) {
     if (!window.confirm('¿Revocar este dispositivo? La app dejará de poder operar inmediatamente.'))
       return;
-    await request(`/api/v1/admin/devices/${id}`, {
-      method: 'DELETE',
-      headers: { 'x-csrf-token': csrf },
-    });
-    onSaved();
+    setError('');
+    try {
+      await request(`/api/v1/admin/devices/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-csrf-token': csrf },
+      });
+      onSaved();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'No fue posible revocar el dispositivo.');
+    }
   }
   return (
     <div className="devices-admin">
