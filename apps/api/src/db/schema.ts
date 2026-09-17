@@ -94,6 +94,10 @@ export const spinCodes = pgTable(
     remainingSpins: integer('remaining_spins').notNull().default(1),
     active: boolean('active').notNull().default(true),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
+    orderId: uuid('order_id'),
+    issuedByDeviceId: uuid('issued_by_device_id'),
+    issueIdempotencyKey: uuid('issue_idempotency_key'),
+    issuedCodeCiphertext: text('issued_code_ciphertext'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -126,6 +130,68 @@ export const demoSpinResults = pgTable('demo_spin_results', {
     .references(() => prizes.id),
   prizeLabel: text('prize_label').notNull(),
   targetSegment: integer('target_segment').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const mobileDevices = pgTable('mobile_devices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  tokenDigest: text('token_digest').unique(),
+  pairingDigest: text('pairing_digest').unique(),
+  pairingExpiresAt: timestamp('pairing_expires_at', { withTimezone: true }),
+  pairingUsedAt: timestamp('pairing_used_at', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orders = pgTable('orders', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  source: text('source').notNull().default('manual_whatsapp'),
+  status: text('status').notNull().default('new'),
+  customerName: text('customer_name').notNull(),
+  neighborhood: text('neighborhood').notNull().default(''),
+  streetAndNumber: text('street_and_number').notNull().default(''),
+  references: text('references').notNull().default(''),
+  deliveryNotes: text('delivery_notes').notNull().default(''),
+  rawMessage: text('raw_message').notNull().default(''),
+  promotionSnapshot: jsonb('promotion_snapshot').$type<Record<string, unknown> | null>(),
+  subtotalCents: integer('subtotal_cents').notNull(),
+  deliveryCents: integer('delivery_cents').notNull().default(0),
+  totalCents: integer('total_cents').notNull(),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderItems = pgTable('order_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  productId: text('product_id')
+    .notNull()
+    .references(() => products.id),
+  productName: text('product_name').notNull(),
+  unitPriceCents: integer('unit_price_cents').notNull(),
+  quantity: integer('quantity').notNull(),
+  removedIngredients: jsonb('removed_ingredients').$type<string[]>().notNull().default([]),
+  modifiers: jsonb('modifiers').$type<Record<string, unknown>[]>().notNull().default([]),
+  combo: jsonb('combo').$type<Record<string, unknown> | null>(),
+  note: text('note').notNull().default(''),
+  lineTotalCents: integer('line_total_cents').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderEvents = pgTable('order_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').notNull(),
+  status: text('status'),
+  note: text('note').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

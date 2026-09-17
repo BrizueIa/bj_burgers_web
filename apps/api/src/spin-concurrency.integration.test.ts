@@ -14,8 +14,13 @@ let database: Database;
 describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () => {
   beforeAll(async () => {
     database = createDatabase(testDatabaseUrl!);
-    const migration = await readFile(resolve('migrations/0001_initial.sql'), 'utf8');
-    await database.sql.unsafe(migration);
+    for (const filename of [
+      '0001_initial.sql',
+      '0002_demo_spins.sql',
+      '0003_operator_orders.sql',
+    ]) {
+      await database.sql.unsafe(await readFile(resolve('migrations', filename), 'utf8'));
+    }
     await database.sql`insert into prizes (id, label, emoji, weight, active, inventory, target_segments)
       values ('test-prize', 'Premio de prueba', '🎁', 1, true, null, '[0]')
       on conflict (id) do update set weight=1, active=true, inventory=null, target_segments='[0]'`;

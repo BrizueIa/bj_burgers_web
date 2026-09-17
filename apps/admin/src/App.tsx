@@ -8,11 +8,12 @@ import {
   LogOut,
   Save,
   ShoppingBag,
+  Smartphone,
   Tags,
 } from 'lucide-react';
 import type { BusinessSettings, PromotionRule } from '@bj/contracts';
 
-type Tab = 'overview' | 'menu' | 'promotions' | 'business' | 'roulette';
+type Tab = 'overview' | 'menu' | 'promotions' | 'business' | 'roulette' | 'devices';
 type CategoryRow = {
   id: string;
   name: string;
@@ -64,6 +65,15 @@ type RedemptionRow = {
   remaining_spins: number;
   created_at: string;
 };
+type DeviceRow = {
+  id: string;
+  name: string;
+  active: boolean;
+  pairing_expires_at: string | null;
+  pairing_used_at: string | null;
+  last_seen_at: string | null;
+  created_at: string;
+};
 type Dashboard = {
   categories: CategoryRow[];
   products: ProductRow[];
@@ -72,6 +82,7 @@ type Dashboard = {
   business: { data: BusinessSettings; updated_at: string };
   prizes: PrizeRow[];
   redemptions: RedemptionRow[];
+  devices: DeviceRow[];
 };
 
 const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> = [
@@ -80,6 +91,7 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'promotions', label: 'Promociones', icon: Tags },
   { id: 'business', label: 'Negocio', icon: Clock3 },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
+  { id: 'devices', label: 'Dispositivos', icon: Smartphone },
 ];
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -843,6 +855,137 @@ function Roulette({
   );
 }
 
+function Devices({
+  devices,
+  csrf,
+  onSaved,
+}: {
+  devices: DeviceRow[];
+  csrf: string;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState('Android operación');
+  const [pairing, setPairing] = useState<{ id: string; code: string; expiresAt: string } | null>(
+    null,
+  );
+  const [error, setError] = useState('');
+  async function create() {
+    setError('');
+    try {
+      const result = await request<{
+        device: { id: string; pairingExpiresAt: string };
+        pairingCode: string;
+      }>('/api/v1/admin/devices', {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({ name }),
+      });
+      setPairing({
+        id: result.device.id,
+        code: result.pairingCode,
+        expiresAt: result.device.pairingExpiresAt,
+      });
+      onSaved();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'No fue posible crear el dispositivo.');
+    }
+  }
+  async function revoke(id: string) {
+    if (!window.confirm('¿Revocar este dispositivo? La app dejará de poder operar inmediatamente.'))
+      return;
+    await request(`/api/v1/admin/devices/${id}`, {
+      method: 'DELETE',
+      headers: { 'x-csrf-token': csrf },
+    });
+    onSaved();
+  }
+  return (
+    <div className="devices-admin">
+      <section className="admin-card">
+        <p className="eyebrow">Vinculación segura</p>
+        <h2>Nuevo Android operativo</h2>
+        <p>
+          La aplicación abre directamente, pero este código de un solo uso autoriza el equipo ante
+          la API.
+        </p>
+        <div className="inline-form">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            aria-label="Nombre del dispositivo"
+          />
+          <button className="primary" onClick={create}>
+            Crear código
+          </button>
+        </div>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        {pairing && (
+          <div className="pairing-code" role="status">
+            <strong>Código de vinculación</strong>
+            <code>{pairing.code}</code>
+            <small>
+              Dispositivo: {pairing.id}
+              <br />
+              Vence: {formatDate(pairing.expiresAt)}. Se muestra una sola vez.
+            </small>
+          </div>
+        )}
+      </section>
+      <section className="admin-card">
+        <h2>Equipos vinculados</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Equipo</th>
+                <th>Estado</th>
+                <th>Última actividad</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {devices.length ? (
+                devices.map((device) => (
+                  <tr key={device.id}>
+                    <td>
+                      {device.name}
+                      <br />
+                      <small>{device.id}</small>
+                    </td>
+                    <td>
+                      {device.active
+                        ? device.pairing_used_at
+                          ? 'Vinculado'
+                          : 'Pendiente'
+                        : 'Revocado'}
+                    </td>
+                    <td>{device.last_seen_at ? formatDate(device.last_seen_at) : '—'}</td>
+                    <td>
+                      {device.active && (
+                        <button className="secondary" onClick={() => revoke(device.id)}>
+                          Revocar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4}>Todavía no hay dispositivos operativos.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [csrf, setCsrf] = useState('');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
@@ -1038,6 +1181,9 @@ export default function App() {
             csrf={csrf}
             onSaved={() => load(true)}
           />
+        )}
+        {tab === 'devices' && (
+          <Devices devices={dashboard.devices} csrf={csrf} onSaved={() => load(true)} />
         )}
       </main>
     </div>

@@ -129,7 +129,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
   app.get('/api/v1/admin/dashboard', async (request, reply) => {
     const context = await protect(request, reply);
     if (!context) return;
-    const [categories, products, modifiers, promotions, settings, prizes, redemptions] =
+    const [categories, products, modifiers, promotions, settings, prizes, redemptions, devices] =
       await Promise.all([
         database.sql`select * from categories order by sort_order`,
         database.sql`select * from products order by category_id, sort_order`,
@@ -138,6 +138,7 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
         database.sql`select data, updated_at from business_settings where id = 'primary'`,
         database.sql`select * from prizes order by id`,
         database.sql`select r.*, c.code_hint, p.emoji from spin_redemptions r join spin_codes c on c.id = r.code_id join prizes p on p.id = r.prize_id order by r.created_at desc limit 100`,
+        database.sql`select id, name, active, pairing_expires_at, pairing_used_at, last_seen_at, created_at from mobile_devices order by created_at desc`,
       ]);
     return {
       categories,
@@ -147,7 +148,42 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       business: settings[0] ?? null,
       prizes,
       redemptions,
+      devices,
     };
+  });
+
+  app.post('/api/v1/admin/devices', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const name = (request.body as { name?: string }).name?.trim();
+    if (!name || name.length > 80)
+      return reply.code(400).send({ message: 'Indica un nombre de hasta 80 caracteres.' });
+    const pairingCode = createOpaqueToken(24);
+    const rows = await database.sql<{ id: string; pairing_expires_at: Date }[]>`
+      insert into mobile_devices (name, pairing_digest, pairing_expires_at, created_by_user_id)
+      values (${name}, ${digestToken(pairingCode, config.SESSION_SECRET)}, now() + interval '15 minutes', ${context.userId})
+      returning id, pairing_expires_at`;
+    await audit(database, context, 'create', 'mobile_device', rows[0]!.id);
+    return {
+      device: {
+        id: rows[0]!.id,
+        name,
+        pairingExpiresAt: rows[0]!.pairing_expires_at.toISOString(),
+      },
+      pairingCode,
+    };
+  });
+
+  app.delete('/api/v1/admin/devices/:id', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const id = (request.params as { id: string }).id;
+    const rows = await database.sql<{ id: string }[]>`
+      update mobile_devices set active=false, token_digest=null, pairing_digest=null, pairing_expires_at=null, updated_at=now()
+      where id=${id} and active=true returning id`;
+    if (!rows[0]) return reply.code(404).send({ message: 'Dispositivo no encontrado.' });
+    await audit(database, context, 'revoke', 'mobile_device', id);
+    return { ok: true };
   });
 
   app.put('/api/v1/admin/products/:id', async (request, reply) => {
