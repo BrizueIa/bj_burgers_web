@@ -9,10 +9,13 @@ import { createDatabase } from './db/client.js';
 import { loadCatalog } from './catalog-repository.js';
 import { registerAdmin } from './admin-routes.js';
 import { createDemoSpin, lookupSpinResult, redeemSpin, SpinError } from './spin-service.js';
+import { InMemoryOrderNotifier } from './order-service.js';
+import { registerOperator } from './operator-routes.js';
 
 export async function buildApp(env = process.env) {
   const config = loadConfig(env);
   const database = createDatabase(config.DATABASE_URL);
+  const orderNotifier = new InMemoryOrderNotifier();
   const app = Fastify({
     logger: config.NODE_ENV !== 'test',
     trustProxy: true,
@@ -130,6 +133,7 @@ export async function buildApp(env = process.env) {
   });
 
   await registerAdmin(app, database, config);
+  await registerOperator(app, database, config, orderNotifier);
   app.setErrorHandler((error, _request, reply) => {
     const handled = error as Error & { statusCode?: number };
     if (handled.name === 'ZodError')

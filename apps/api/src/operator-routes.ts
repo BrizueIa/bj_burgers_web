@@ -1,0 +1,241 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import {
+  operatorDeviceActivationSchema,
+  orderCreateRequestSchema,
+  orderDraftParseRequestSchema,
+  orderStatusSchema,
+  orderStatusUpdateSchema,
+  spinCodeIssueRequestSchema,
+} from '@bj/contracts';
+import type { AppConfig } from './config.js';
+import type { Database } from './db/client.js';
+import {
+  type InMemoryOrderNotifier,
+  OrderError,
+  createOrder,
+  getOrder,
+  issueOrderSpinCode,
+  listOrders,
+  parseWhatsAppOrder,
+  updateOrderStatus,
+} from './order-service.js';
+import { createOpaqueToken, digestToken } from './security.js';
+import { loadCatalog } from './catalog-repository.js';
+
+interface OperatorContext {
+  deviceId: string;
+  deviceName: string;
+}
+
+async function operatorFor(
+  request: FastifyRequest,
+  database: Database,
+  config: AppConfig,
+): Promise<OperatorContext | null> {
+  const value = request.headers.authorization;
+  const token = value?.startsWith('Bearer ') ? value.slice('Bearer '.length) : '';
+  if (!token) return null;
+  const digest = digestToken(token, config.SESSION_SECRET);
+  const rows = await database.sql<{ id: string; name: string }[]>`
+    select id, name from mobile_devices where token_digest=${digest} and active=true limit 1`;
+  if (!rows[0]) return null;
+  await database.sql`update mobile_devices set last_seen_at=now(), updated_at=now() where id=${rows[0].id}`;
+  return { deviceId: rows[0].id, deviceName: rows[0].name };
+}
+
+async function protectOperator(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  database: Database,
+  config: AppConfig,
+) {
+  const context = await operatorFor(request, database, config);
+  if (!context) {
+    await reply.code(401).send({ message: 'Dispositivo no autorizado o revocado.' });
+    return;
+  }
+  return context;
+}
+
+export async function registerOperator(
+  app: FastifyInstance,
+  database: Database,
+  config: AppConfig,
+  notifier: InMemoryOrderNotifier,
+) {
+  app.get('/api/v1/openapi.json', async () => ({
+    openapi: '3.1.0',
+    info: { title: 'B&J Burgers API', version: '1.1.0' },
+    paths: {
+      '/api/v1/operator/devices/activate': {
+        post: { summary: 'Vincula un Android con código temporal' },
+      },
+      '/api/v1/operator/order-drafts/parse': {
+        post: { summary: 'Interpreta mensaje de WhatsApp' },
+      },
+      '/api/v1/operator/orders': {
+        get: { summary: 'Lista comandas' },
+        post: { summary: 'Crea comanda confirmada' },
+      },
+      '/api/v1/operator/orders/{id}': { get: { summary: 'Detalle de comanda' } },
+      '/api/v1/operator/orders/{id}/status': { patch: { summary: 'Actualiza estado de comanda' } },
+      '/api/v1/operator/orders/{id}/spin-code': {
+        post: { summary: 'Emite código único de ruleta' },
+      },
+      '/api/v1/operator/orders/stream': { get: { summary: 'Eventos SSE de comandas' } },
+    },
+  }));
+
+  app.post(
+    '/api/v1/operator/devices/activate',
+    { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } },
+    async (request, reply) => {
+      const input = operatorDeviceActivationSchema.parse(request.body);
+      try {
+        return await database.sql.begin(async (tx) => {
+          const rows = await tx<
+            {
+              id: string;
+              name: string;
+              pairing_digest: string | null;
+              pairing_expires_at: Date | null;
+              active: boolean;
+            }[]
+          >`select id, name, pairing_digest, pairing_expires_at, active from mobile_devices where id=${input.deviceId} for update`;
+          const device = rows[0];
+          if (
+            !device ||
+            !device.active ||
+            !device.pairing_digest ||
+            !device.pairing_expires_at ||
+            device.pairing_expires_at < new Date() ||
+            device.pairing_digest !== digestToken(input.pairingCode, config.SESSION_SECRET)
+          )
+            throw new OrderError(401, 'El código de vinculación no es válido o venció.');
+          const token = createOpaqueToken();
+          await tx`
+            update mobile_devices
+            set token_digest=${digestToken(token, config.SESSION_SECRET)}, pairing_digest=null, pairing_expires_at=null,
+                pairing_used_at=now(), last_seen_at=now(), updated_at=now()
+            where id=${device.id}`;
+          return { device: { id: device.id, name: device.name }, credential: token };
+        });
+      } catch (error) {
+        if (error instanceof OrderError)
+          return reply.code(error.statusCode).send({ message: error.message });
+        throw error;
+      }
+    },
+  );
+
+  app.post('/api/v1/operator/order-drafts/parse', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const input = orderDraftParseRequestSchema.parse(request.body);
+    const catalog = await loadCatalog(database);
+    return parseWhatsAppOrder(input.rawMessage, catalog);
+  });
+
+  app.get('/api/v1/operator/orders', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const statusValue = (request.query as { status?: string }).status;
+    const status = statusValue ? orderStatusSchema.parse(statusValue) : undefined;
+    return { orders: await listOrders(database.sql, status) };
+  });
+
+  app.post('/api/v1/operator/orders', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const input = orderCreateRequestSchema.parse(request.body);
+    const catalog = await loadCatalog(database);
+    try {
+      const order = await createOrder(database.sql, catalog, input, context.deviceId, notifier);
+      return reply.code(201).send({ order });
+    } catch (error) {
+      if (error instanceof OrderError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
+    }
+  });
+
+  app.get('/api/v1/operator/orders/:id', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const order = await getOrder(database.sql, id);
+    if (!order) return reply.code(404).send({ message: 'La comanda no existe.' });
+    return { order };
+  });
+
+  app.patch('/api/v1/operator/orders/:id/status', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const input = orderStatusUpdateSchema.parse(request.body);
+    try {
+      return {
+        order: await updateOrderStatus(
+          database.sql,
+          id,
+          input.status,
+          input.note,
+          context.deviceId,
+          notifier,
+        ),
+      };
+    } catch (error) {
+      if (error instanceof OrderError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
+    }
+  });
+
+  app.post('/api/v1/operator/orders/:id/spin-code', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const input = spinCodeIssueRequestSchema.parse(request.body);
+    try {
+      return await issueOrderSpinCode(
+        database.sql,
+        id,
+        input.idempotencyKey,
+        context.deviceId,
+        config.CODE_HMAC_SECRET,
+        notifier,
+      );
+    } catch (error) {
+      if (error instanceof OrderError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
+    }
+  });
+
+  app.get('/api/v1/operator/orders/stream', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    reply.raw.write(
+      `event: connected\ndata: ${JSON.stringify({ device: context.deviceName })}\n\n`,
+    );
+    const unsubscribe = notifier.subscribe((orderId) => {
+      if (!reply.raw.writableEnded)
+        reply.raw.write(`event: order\ndata: ${JSON.stringify({ orderId })}\n\n`);
+    });
+    const heartbeat = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(': keep-alive\n\n');
+    }, 25000);
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+}

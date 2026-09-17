@@ -38,6 +38,32 @@ select {
 button {
   cursor: pointer;
 }
+.devices-admin {
+  display: grid;
+  gap: 1.25rem;
+}
+.inline-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.inline-form input {
+  flex: 1 1 16rem;
+}
+.pairing-code {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--gold);
+  background: #090b0a;
+  display: grid;
+  gap: 0.45rem;
+}
+.pairing-code code {
+  color: var(--gold);
+  font-size: clamp(1rem, 3vw, 1.45rem);
+  overflow-wrap: anywhere;
+}
 .spin {
   animation: spin 1s linear infinite;
 }
