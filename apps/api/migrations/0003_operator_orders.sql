@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS orders (
   customer_name text NOT NULL,
   neighborhood text NOT NULL DEFAULT '',
   street_and_number text NOT NULL DEFAULT '',
-  references text NOT NULL DEFAULT '',
+  delivery_references text NOT NULL DEFAULT '',
   delivery_notes text NOT NULL DEFAULT '',
   raw_message text NOT NULL DEFAULT '',
   promotion_snapshot jsonb,

@@ -152,7 +152,7 @@ function mapOrder(
     customerName: row.customer_name,
     neighborhood: row.neighborhood,
     streetAndNumber: row.street_and_number,
-    references: row.references,
+    references: row.delivery_references,
     deliveryNotes: row.delivery_notes,
     rawMessage: row.raw_message,
     promotion: row.promotion_snapshot,
@@ -297,7 +297,7 @@ export async function createOrder(
     );
     const inserted = await tx<{ id: string }[]>`
       insert into orders (
-        source, customer_name, neighborhood, street_and_number, references, delivery_notes, raw_message,
+        source, customer_name, neighborhood, street_and_number, delivery_references, delivery_notes, raw_message,
         promotion_snapshot, subtotal_cents, delivery_cents, total_cents, idempotency_key, created_by_device_id
       ) values (
         'manual_whatsapp', ${input.customerName}, ${input.neighborhood}, ${input.streetAndNumber}, ${input.references}, ${input.deliveryNotes}, ${input.rawMessage},

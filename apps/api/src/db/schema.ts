@@ -153,7 +153,7 @@ export const orders = pgTable('orders', {
   customerName: text('customer_name').notNull(),
   neighborhood: text('neighborhood').notNull().default(''),
   streetAndNumber: text('street_and_number').notNull().default(''),
-  references: text('references').notNull().default(''),
+  references: text('delivery_references').notNull().default(''),
   deliveryNotes: text('delivery_notes').notNull().default(''),
   rawMessage: text('raw_message').notNull().default(''),
   promotionSnapshot: jsonb('promotion_snapshot').$type<Record<string, unknown> | null>(),
