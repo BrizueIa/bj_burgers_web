@@ -75,4 +75,20 @@ describe('BjApiClient', () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
   });
+
+  it('uses the server capability list before exposing a staged POS circuit', async () => {
+    const client = new BjApiClient({
+      baseUrl: 'https://api.example/api/v1',
+      credentialStore: store,
+      fetch: (async () =>
+        json({
+          capabilities: [
+            { key: 'unified_orders', enabled: false, updatedAt: '2026-09-19T00:00:00.000Z' },
+          ],
+        })) as typeof globalThis.fetch,
+    });
+    await expect(client.capabilities()).resolves.toEqual([
+      { key: 'unified_orders', enabled: false, updatedAt: '2026-09-19T00:00:00.000Z' },
+    ]);
+  });
 });

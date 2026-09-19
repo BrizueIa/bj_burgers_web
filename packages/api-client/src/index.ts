@@ -1,5 +1,6 @@
 import {
   businessStateResponseSchema,
+  capabilitiesResponseSchema,
   catalogSchema,
   operatorDeviceActivationResponseSchema,
   orderDraftSchema,
@@ -7,6 +8,7 @@ import {
   ordersResponseSchema,
   spinCodeIssueResponseSchema,
   type BusinessState,
+  type Capability,
   type Order,
   type OrderCreateRequest,
   type OrderDraft,
@@ -156,6 +158,12 @@ export class BjApiClient {
 
   catalog() {
     return this.request('/catalog', catalogSchema, {}, false);
+  }
+
+  capabilities(): Promise<Capability[]> {
+    return this.request('/capabilities', capabilitiesResponseSchema, {}, false).then(
+      (result) => result.capabilities,
+    );
   }
 
   orders(status?: OrderStatus) {

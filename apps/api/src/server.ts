@@ -11,6 +11,7 @@ import { registerAdmin } from './admin-routes.js';
 import { createDemoSpin, lookupSpinResult, redeemSpin, SpinError } from './spin-service.js';
 import { InMemoryOrderNotifier } from './order-service.js';
 import { registerOperator } from './operator-routes.js';
+import { getCapabilities } from './pos-foundation-service.js';
 
 export async function buildApp(env = process.env) {
   const config = loadConfig(env);
@@ -60,6 +61,13 @@ export async function buildApp(env = process.env) {
       .header('etag', `"${catalog.version}"`)
       .header('cache-control', 'public, max-age=60, stale-while-revalidate=86400');
     return catalog;
+  });
+
+  /** Clients use this server-authoritative list to hide workflows until the
+   * matching migration and reconciliation have been explicitly activated. */
+  app.get('/api/v1/capabilities', async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return { capabilities: await getCapabilities(database.sql) };
   });
 
   app.get('/api/v1/store-status', async (_request, reply) => {
