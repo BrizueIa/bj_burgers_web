@@ -109,14 +109,23 @@ export async function runIdempotent<T extends Json>(
         request_fingerprint: string;
         response_status: number;
         response_body: T;
+        actor_kind: string;
+        admin_user_id: string | null;
+        device_id: string | null;
+        origin: string;
       }[]
-    >`select operation, request_fingerprint, response_status, response_body
+    >`select operation, request_fingerprint, response_status, response_body,
+        actor_kind, admin_user_id, device_id, origin
       from idempotency_operations where idempotency_key=${input.idempotencyKey}`;
     if (existing[0]) {
       const previous = existing[0];
       if (
         previous.operation !== input.operation ||
-        previous.request_fingerprint !== requestFingerprint
+        previous.request_fingerprint !== requestFingerprint ||
+        previous.actor_kind !== columns.actorKind ||
+        previous.admin_user_id !== columns.adminUserId ||
+        previous.device_id !== columns.deviceId ||
+        previous.origin !== columns.origin
       )
         throw new PosFoundationError(409, 'Esta clave ya pertenece a otra operación.');
       return { result: previous.response_body, reused: true, statusCode: previous.response_status };

@@ -110,6 +110,20 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
         async () => ({ confirmed: false }),
       ),
     ).rejects.toMatchObject({ statusCode: 409 });
+    const otherDeviceId = randomUUID();
+    await database.sql`insert into mobile_devices(id,name) values(${otherDeviceId}, 'Otro POS')`;
+    await expect(
+      runIdempotent(
+        database.sql,
+        {
+          idempotencyKey,
+          operation: 'foundation-test',
+          request: { quantity: '1.000', line: 'prueba' },
+          actor: { kind: 'device', deviceId: otherDeviceId, origin: 'android' },
+        },
+        async () => ({ confirmed: false }),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
     const rows = await database.sql<{ effects: number; operations: number }[]>`
       select
         (select count(*)::int from operation_audit_logs where entity='foundation-test') as effects,

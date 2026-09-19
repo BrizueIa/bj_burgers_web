@@ -16,7 +16,6 @@ import {
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
 import { createOpaqueToken, digestToken } from './security.js';
-import { auditOperation } from './pos-foundation-service.js';
 
 interface AdminContext {
   userId: string;
@@ -43,18 +42,7 @@ async function audit(
   entity: string,
   entityId?: string,
 ) {
-  await Promise.all([
-    database.sql`insert into audit_logs (user_id, action, entity, entity_id) values (${context.userId}, ${action}, ${entity}, ${entityId ?? null})`,
-    auditOperation(
-      database.sql,
-      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
-      {
-        action,
-        entity,
-        ...(entityId ? { entityId } : {}),
-      },
-    ),
-  ]);
+  await database.sql`insert into audit_logs (user_id, action, entity, entity_id) values (${context.userId}, ${action}, ${entity}, ${entityId ?? null})`;
 }
 
 async function triggerDeploy(config: AppConfig) {
