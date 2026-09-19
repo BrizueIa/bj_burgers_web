@@ -45,7 +45,12 @@ Instala primero la versión Flutter de referencia en un dispositivo de prueba y 
 | Comandas y filtros         | Listado, detalle y panel tablet                         | Crear, filtrar y consultar historial           |
 | Importar WhatsApp          | Interpretar, corregir y confirmar borrador              | Extras, ingredientes removidos, combos y notas |
 | Estados y ruleta           | Cambio de estado, emisión, copiar y compartir           | Flujo nueva → entregada y reintento del código |
-| Negocio                    | Inicio, POS básico, inventario, recetas y reportes      | Compra, venta, merma, gasto y receta           |
+| Negocio                    | Inicio, POS, inventario, recetas, caja y reportes       | Compra, comanda, cobro, merma, gasto y receta  |
 | Actualizaciones            | SSE con reconexión y consulta cada 20 s en primer plano | Cambio desde otro dispositivo                  |
 
-La integración de cobros de comandas, caja, proveedores, preparaciones y demás POS completo comienza sólo cuando esta matriz esté validada en teléfono y tablet Android.
+La integración de cobros de comandas, caja, proveedores, preparaciones y demás POS
+se desarrolla en entregas con la API como fuente de verdad. Antes de activar el
+circuito unificado se deben validar esta matriz en teléfono y tablet Android,
+conciliar inventario y cerrar o cancelar las comandas pendientes del circuito
+anterior. Consulta [POS_IMPLEMENTATION_PLAN.md](POS_IMPLEMENTATION_PLAN.md) y
+[POS_TRACEABILITY.md](POS_TRACEABILITY.md) para la secuencia y evidencias.

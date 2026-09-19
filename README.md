@@ -23,6 +23,6 @@ Usa `pnpm dev:mobile` para abrir la operación React Native. `pnpm check` valida
 
 Consulta [la guía de migración Android](docs/MOBILE_MIGRATION.md) para desarrollar, vincular y generar el APK de `apps/mobile`.
 
-Consulta [ARCHITECTURE.md](docs/ARCHITECTURE.md), [BRANCHING.md](docs/BRANCHING.md), [CONTRIBUTING.md](docs/CONTRIBUTING.md) y [GITHUB_SETUP.md](docs/GITHUB_SETUP.md) antes de cambiar o desplegar la plataforma.
+Consulta [ARCHITECTURE.md](docs/ARCHITECTURE.md), [BRANCHING.md](docs/BRANCHING.md), [CONTRIBUTING.md](docs/CONTRIBUTING.md), [GITHUB_SETUP.md](docs/GITHUB_SETUP.md) y el [plan del POS](docs/POS_IMPLEMENTATION_PLAN.md) antes de cambiar o desplegar la plataforma.
 
 La web se publica como contenido estático en Cloudflare Pages. API, panel y PostgreSQL se despliegan como un proyecto independiente en Dockploy usando `compose.yaml`. Consulta `docs/DEPLOYMENT.md` antes de desplegar.
