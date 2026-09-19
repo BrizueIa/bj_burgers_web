@@ -12,7 +12,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@astrojs/react": "^5.0.2",
+    "@astrojs/react": "^6.0.5",
     "@astrojs/sitemap": "^3.6.0",
     "@bj/contracts": "workspace:*",
     "astro": "^7.3.2",
