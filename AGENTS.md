@@ -17,6 +17,8 @@ Este repositorio es un monorepo: `apps/web` contiene el sitio y la administraci�
 
 GitHub protege `main`: no admite pushes directos, force-push ni eliminación; la regla también aplica a administradores. Consulta [docs/BRANCHING.md](docs/BRANCHING.md) y [docs/GITHUB_SETUP.md](docs/GITHUB_SETUP.md) para el detalle de la política.
 
+Mientras exista un único responsable, no actives aprobación obligatoria ni revisión obligatoria de `CODEOWNERS`: una persona no puede aprobar su propio pull request. Antes de activarlas, incorpora un segundo revisor con acceso y actualiza [`.github/CODEOWNERS`](.github/CODEOWNERS) para que las rutas correspondientes tengan propietarios que puedan revisar.
+
 ## Reglas de la app móvil
 
 - Conserva el identificador Android `com.bjburgers.operacion`, la marca B&J, español y MXN.

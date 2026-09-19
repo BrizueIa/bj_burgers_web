@@ -9,7 +9,7 @@ La protección activa de `main` exige:
 - Conversaciones resueltas y ramas actualizadas antes de merge.
 - La regla también se aplica a administradores, sin force push ni eliminación de la rama.
 
-No se exige todavía una aprobación porque el repositorio tiene un único responsable y una aprobación propia bloquearía el flujo. Cuando haya un segundo revisor con acceso, activa una aprobación obligatoria y la revisión de `CODEOWNERS`.
+No se exige todavía una aprobación porque el repositorio tiene un único responsable y una aprobación propia bloquearía el flujo. Cuando haya un segundo revisor con acceso, actualiza primero [`.github/CODEOWNERS`](../.github/CODEOWNERS) para que las rutas tengan propietarios que puedan revisar y después activa una aprobación obligatoria y la revisión de `CODEOWNERS`.
 
 No crees una protección adicional para una rama `develop`: el flujo usa `main` protegido y ramas de trabajo cortas. Consulta [BRANCHING.md](BRANCHING.md) para los prefijos, releases y hotfixes.
 

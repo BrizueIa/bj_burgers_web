@@ -25,7 +25,7 @@ pnpm check
 - Explica el comportamiento final, la validación realizada y cualquier efecto sobre datos o despliegue.
 - No incluyas secretos, APKs, AABs, keystores, dumps, archivos `.env` ni resultados de build.
 - Incluye la migración y prueba asociada cuando cambies datos o una regla del servidor.
-- Espera CI verde y revisión antes de integrar a `main`.
+- Espera CI verde antes de integrar a `main`; cuando haya más de un responsable, cumple también la revisión requerida.
 - Usa squash merge y elimina la rama después de integrar el pull request.
 
 Consulta [BRANCHING.md](BRANCHING.md) para las reglas de ramas, releases, hotfixes y tags.
