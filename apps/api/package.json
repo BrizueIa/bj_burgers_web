@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:postgres": "tsx scripts/require-test-database.ts && vitest run src/spin-concurrency.integration.test.ts",
     "lint": "eslint src scripts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
