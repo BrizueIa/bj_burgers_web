@@ -14,11 +14,24 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
     { name: 'mobile', use: { ...devices['Pixel 5'] } },
+    { name: 'tablet', use: { ...devices['iPad (gen 7)'] } },
   ],
-  webServer: {
-    command: 'node node_modules/astro/bin/astro.mjs preview --host 127.0.0.1 --port 4322',
-    cwd: './apps/web',
-    url: 'http://127.0.0.1:4322',
-    reuseExistingServer: !process.env.CI,
-  },
+  webServer: [
+    {
+      command: 'pnpm --filter @bj/api dev',
+      url: 'http://127.0.0.1:4100/health',
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      command: 'pnpm --filter @bj/admin dev -- --host 127.0.0.1',
+      url: 'http://127.0.0.1:5173/admin/',
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      command: 'node node_modules/astro/bin/astro.mjs preview --host 127.0.0.1 --port 4322',
+      cwd: './apps/web',
+      url: 'http://127.0.0.1:4322',
+      reuseExistingServer: !process.env.CI,
+    },
+  ],
 });

@@ -1,8 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase, type Database } from './db/client.js';
+import { applyMigrations } from './db/migrate.js';
+import { requireTestDatabaseUrl } from './db/test-database.js';
 import { digestCode } from './security.js';
 import { redeemSpin } from './spin-service.js';
 
@@ -13,14 +14,18 @@ let database: Database;
 
 describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () => {
   beforeAll(async () => {
-    database = createDatabase(testDatabaseUrl!);
-    for (const filename of [
+    database = createDatabase(requireTestDatabaseUrl(testDatabaseUrl));
+    // The dedicated test database is reset before proving both a new and an
+    // already-migrated database can use the exact migration runner.
+    await database.sql.unsafe('drop schema public cascade; create schema public');
+    const directory = fileURLToPath(new URL('../migrations', import.meta.url));
+    expect(await applyMigrations(database.sql, directory)).toEqual([
       '0001_initial.sql',
       '0002_demo_spins.sql',
       '0003_operator_orders.sql',
-    ]) {
-      await database.sql.unsafe(await readFile(resolve('migrations', filename), 'utf8'));
-    }
+      '0004_business.sql',
+    ]);
+    expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into prizes (id, label, emoji, weight, active, inventory, target_segments)
       values ('test-prize', 'Premio de prueba', '🎁', 1, true, null, '[0]')
       on conflict (id) do update set weight=1, active=true, inventory=null, target_segments='[0]'`;

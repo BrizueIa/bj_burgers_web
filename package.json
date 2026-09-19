@@ -11,7 +11,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",
-    "e2e": "pnpm --filter @bj/web build && playwright test",
+    "e2e": "pnpm --filter @bj/web build && pnpm --filter @bj/api db:migrate && pnpm --filter @bj/api db:seed && playwright test",
     "check:mobile": "pnpm --filter @bj/mobile exec expo install --check && pnpm --filter @bj/mobile exec expo export --platform android",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:mobile",
     "format": "prettier --write .",
