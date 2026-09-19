@@ -16,3 +16,8 @@ lighthouse-*.json
 backups/
 tmp/
 *.csv
+*.apk
+*.aab
+*.jks
+*.keystore
+keystore.properties

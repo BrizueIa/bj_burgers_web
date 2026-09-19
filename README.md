@@ -7,7 +7,9 @@ Plataforma modular para el sitio público, carrito a WhatsApp, panel administrat
 - `apps/web`: sitio público Astro (`/`, `/menu`, `/ruleta`).
 - `apps/admin`: panel privado React.
 - `apps/api`: API Fastify y PostgreSQL.
+- `apps/mobile`: operación Android con React Native y Expo.
 - `packages/contracts`: contratos, catálogo inicial y reglas compartidas.
+- `packages/api-client`: cliente tipado compartido para la API operativa.
 
 ## Desarrollo local
 
@@ -17,6 +19,10 @@ Plataforma modular para el sitio público, carrito a WhatsApp, panel administrat
 4. Ejecuta `pnpm --filter @bj/api db:migrate` y `pnpm --filter @bj/api db:seed`.
 5. Inicia los procesos con `pnpm dev:api`, `pnpm dev:web` y `pnpm dev:admin`.
 
-`pnpm check` valida formato, lint, tipos, pruebas y builds de todo el workspace. `pnpm e2e` reconstruye la web y ejecuta Playwright en escritorio y móvil.
+Usa `pnpm dev:mobile` para abrir la operación React Native. `pnpm check` valida formato, lint, tipos, pruebas, builds y el bundle Android de Expo. `pnpm e2e` reconstruye la web y ejecuta Playwright en escritorio y móvil.
+
+Consulta [la guía de migración Android](docs/MOBILE_MIGRATION.md) para desarrollar, vincular y generar el APK de `apps/mobile`.
+
+Consulta [ARCHITECTURE.md](docs/ARCHITECTURE.md), [BRANCHING.md](docs/BRANCHING.md), [CONTRIBUTING.md](docs/CONTRIBUTING.md) y [GITHUB_SETUP.md](docs/GITHUB_SETUP.md) antes de cambiar o desplegar la plataforma.
 
 La web se publica como contenido estático en Cloudflare Pages. API, panel y PostgreSQL se despliegan como un proyecto independiente en Dockploy usando `compose.yaml`. Consulta `docs/DEPLOYMENT.md` antes de desplegar.

@@ -16,7 +16,8 @@ export default defineConfig({
     { name: 'mobile', use: { ...devices['Pixel 5'] } },
   ],
   webServer: {
-    command: 'pnpm --filter @bj/web preview --host 127.0.0.1 --port 4322',
+    command: 'node node_modules/astro/bin/astro.mjs preview --host 127.0.0.1 --port 4322',
+    cwd: './apps/web',
     url: 'http://127.0.0.1:4322',
     reuseExistingServer: !process.env.CI,
   },

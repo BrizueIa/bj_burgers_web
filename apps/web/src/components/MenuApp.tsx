@@ -26,6 +26,7 @@ const emptyDelivery: DeliveryDetails = {
 
 export default function MenuApp({ initialCatalog, apiBaseUrl }: Props) {
   const [catalog, setCatalog] = useState(initialCatalog);
+  const [hydrated, setHydrated] = useState(false);
   const [items, setItems] = useState<CartItem[]>([]);
   const [selected, setSelected] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
@@ -34,6 +35,10 @@ export default function MenuApp({ initialCatalog, apiBaseUrl }: Props) {
   const [cartReady, setCartReady] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const cartCloseRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -110,7 +115,7 @@ export default function MenuApp({ initialCatalog, apiBaseUrl }: Props) {
   }
 
   return (
-    <div className="menu-app" id="ordenar">
+    <div className="menu-app" data-hydrated={hydrated || undefined} id="ordenar">
       {catalog.business.temporarilyClosed && (
         <div className="closure-banner" role="alert">
           <strong>Servicio pausado</strong>

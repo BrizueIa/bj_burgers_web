@@ -22,6 +22,14 @@ import {
 } from './order-service.js';
 import { createOpaqueToken, digestToken } from './security.js';
 import { loadCatalog } from './catalog-repository.js';
+import {
+  businessState,
+  entrySchema,
+  ingredientSchema,
+  recipeSchema,
+  recordEntry,
+  saveRecipe,
+} from './business-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -64,6 +72,34 @@ export async function registerOperator(
   config: AppConfig,
   notifier: InMemoryOrderNotifier,
 ) {
+  app.get('/api/v1/operator/business', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    reply.header('cache-control', 'no-store');
+    const query = z
+      .object({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }) })
+      .parse(request.query);
+    if (Date.parse(query.to) <= Date.parse(query.from))
+      return reply.code(400).send({ message: 'El período no es válido.' });
+    return businessState(database.sql, query.from, query.to);
+  });
+  app.post('/api/v1/operator/business/ingredients', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    const input = ingredientSchema.parse(request.body);
+    const rows =
+      await database.sql`insert into stock_ingredients(name,unit,minimum) values(${input.name},${input.unit},${input.minimum}) on conflict(name) do nothing returning *`;
+    if (!rows.length)
+      return reply.code(409).send({ message: 'Ya existe un ingrediente con ese nombre.' });
+    return reply.code(201).send({ ingredient: rows[0] });
+  });
+  app.post('/api/v1/operator/business/recipes', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    return saveRecipe(database.sql, recipeSchema.parse(request.body));
+  });
+  app.post('/api/v1/operator/business/entries', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    return recordEntry(database.sql, entrySchema.parse(request.body), context.deviceId);
+  });
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',
     info: { title: 'B&J Burgers API', version: '1.1.0' },

@@ -9,6 +9,7 @@ test('la portada comunica la propuesta y lleva al menú', async ({ page }) => {
 
 test('un cliente personaliza un producto y arma el pedido', async ({ page }) => {
   await page.goto('/menu');
+  await expect(page.locator('.menu-app')).toHaveAttribute('data-hydrated', 'true');
   const product = page.locator('#clasica');
   await expect(product.getByRole('heading', { name: 'Clásica' })).toBeVisible();
   await product.getByRole('button', { name: 'Personalizar' }).click();
@@ -41,6 +42,7 @@ test('la ruleta solo muestra el resultado que devuelve la API', async ({ page })
     }),
   );
   await page.goto('/ruleta');
+  await expect(page.locator('.roulette-app')).toHaveAttribute('data-hydrated', 'true');
   await page.getByLabel('Código').fill('BJ-1234');
   await page.getByRole('button', { name: 'Girar ruleta' }).click();
   await expect(page.getByRole('dialog')).toContainText('10% de descuento');
@@ -63,6 +65,7 @@ test('la tirada de prueba queda marcada y verificable como no canjeable', async 
     }),
   );
   await page.goto('/ruleta');
+  await expect(page.locator('.roulette-app')).toHaveAttribute('data-hydrated', 'true');
   await page.getByRole('button', { name: 'Probar sin código' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('PRUEBA · NO CANJEABLE');
