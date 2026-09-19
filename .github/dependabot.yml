@@ -4,12 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      development-dependencies:
-        dependency-type: development
+    # Las actualizaciones rutinarias se preparan en PRs revisados junto con la compatibilidad de Expo.
+    # Este límite no bloquea los PRs de actualizaciones de seguridad de Dependabot.
+    open-pull-requests-limit: 0
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
