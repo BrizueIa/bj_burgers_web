@@ -20,7 +20,7 @@ export default defineConfig({
     {
       command: 'pnpm --filter @bj/api dev',
       url: 'http://127.0.0.1:4100/health',
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
     },
     {
       command: 'pnpm --filter @bj/admin exec vite --host 127.0.0.1 --port 5173',
