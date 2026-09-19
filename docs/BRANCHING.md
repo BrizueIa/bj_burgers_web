@@ -25,7 +25,7 @@ No se crean ramas por área como `mobile`, `api` o `web`: una función de negoci
 
 1. Actualiza `main`, crea la rama y mantén el pull request enfocado.
 2. Ejecuta `pnpm check`; ejecuta `pnpm e2e` cuando afecte la web pública.
-3. El pull request debe quedar actualizado con `main`, recibir revisión y pasar los checks requeridos.
+3. El pull request debe quedar actualizado con `main` y pasar los checks requeridos; cuando haya más de un responsable, también debe recibir la revisión requerida.
 4. Usa **squash merge** para que cada pull request se integre como un cambio rastreable.
 5. Elimina la rama ya integrada.
 
