@@ -23,7 +23,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: 'pnpm --filter @bj/admin dev -- --host 127.0.0.1',
+      command: 'pnpm --filter @bj/admin exec vite --host 127.0.0.1 --port 5173',
       url: 'http://127.0.0.1:5173/admin/',
       reuseExistingServer: !process.env.CI,
     },
