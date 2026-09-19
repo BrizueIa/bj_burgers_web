@@ -14,7 +14,7 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
     { name: 'mobile', use: { ...devices['Pixel 5'] } },
-    { name: 'tablet', use: { ...devices['iPad (gen 7)'] } },
+    { name: 'tablet', use: { ...devices['iPad (gen 7)'], browserName: 'chromium' } },
   ],
   webServer: [
     {
