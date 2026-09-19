@@ -77,6 +77,11 @@ function DateWindow({
 export function BusinessPage({ section }: { section: BusinessSection }) {
   const [range, setRange] = useState(dayWindow);
   const { data, error, isLoading, refetch, isFetching } = useBusiness(range);
+  const capabilities = useQuery({
+    queryKey: ['capabilities'],
+    queryFn: () => api.capabilities(),
+    staleTime: 60_000,
+  });
   if (isLoading) return <Loading />;
   if (!data)
     return (
@@ -162,6 +167,13 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       ) : null}
       {section === 'pos' ? (
         <>
+          {!capabilities.data?.find((capability) => capability.key === 'unified_orders')
+            ?.enabled ? (
+            <Notice kind="warning">
+              El POS unificado aún no está habilitado por el servidor. Las operaciones confirmadas
+              seguirán el circuito disponible hasta que se complete la conciliación.
+            </Notice>
+          ) : null}
           <Text style={shared.subtitle}>
             Ventas de mostrador con precio de lista y consumo de receta. Las comandas actuales no
             registran todavía el cobro.

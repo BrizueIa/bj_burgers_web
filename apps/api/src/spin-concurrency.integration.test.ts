@@ -6,6 +6,7 @@ import { applyMigrations } from './db/migrate.js';
 import { requireTestDatabaseUrl } from './db/test-database.js';
 import { digestCode } from './security.js';
 import { redeemSpin } from './spin-service.js';
+import { getCapabilities, runIdempotent } from './pos-foundation-service.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const secret = 'secreto-de-integracion-con-mas-de-treinta-y-dos-caracteres';
@@ -24,6 +25,7 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0002_demo_spins.sql',
       '0003_operator_orders.sql',
       '0004_business.sql',
+      '0005_pos_foundation.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into prizes (id, label, emoji, weight, active, inventory, target_segments)
@@ -67,5 +69,68 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       select (select count(*)::int from spin_redemptions r join spin_codes c on c.id=r.code_id where c.code_hint='TST1') as redemptions,
              (select remaining_spins from spin_codes where code_hint='TST1') as balance`;
     expect(rows[0]).toEqual({ redemptions: 1, balance: 0 });
+  });
+
+  it('persiste una respuesta idempotente y rechaza una clave con otro contenido', async () => {
+    const idempotencyKey = randomUUID();
+    const actor = { kind: 'device' as const, deviceId: randomUUID(), origin: 'android' as const };
+    await database.sql`insert into mobile_devices(id,name) values(${actor.deviceId}, 'POS prueba')`;
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        runIdempotent(
+          database.sql,
+          {
+            idempotencyKey,
+            operation: 'foundation-test',
+            request: { quantity: '1.000', line: 'prueba' },
+            actor,
+          },
+          async (transaction) => {
+            await transaction`insert into operation_audit_logs
+              (actor_kind, device_id, origin, action, entity, reason)
+              values ('device', ${actor.deviceId}, 'android', 'confirm', 'foundation-test', 'prueba')`;
+            return { confirmed: true };
+          },
+        ),
+      ),
+    );
+    expect(results.filter((result) => !result.reused)).toHaveLength(1);
+    expect(results.map((result) => result.result)).toEqual(
+      Array.from({ length: 6 }, () => ({ confirmed: true })),
+    );
+    await expect(
+      runIdempotent(
+        database.sql,
+        {
+          idempotencyKey,
+          operation: 'foundation-test',
+          request: { quantity: '2.000', line: 'prueba' },
+          actor,
+        },
+        async () => ({ confirmed: false }),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    const otherDeviceId = randomUUID();
+    await database.sql`insert into mobile_devices(id,name) values(${otherDeviceId}, 'Otro POS')`;
+    await expect(
+      runIdempotent(
+        database.sql,
+        {
+          idempotencyKey,
+          operation: 'foundation-test',
+          request: { quantity: '1.000', line: 'prueba' },
+          actor: { kind: 'device', deviceId: otherDeviceId, origin: 'android' },
+        },
+        async () => ({ confirmed: false }),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    const rows = await database.sql<{ effects: number; operations: number }[]>`
+      select
+        (select count(*)::int from operation_audit_logs where entity='foundation-test') as effects,
+        (select count(*)::int from idempotency_operations where idempotency_key=${idempotencyKey}) as operations`;
+    expect(rows[0]).toEqual({ effects: 1, operations: 1 });
+    expect((await getCapabilities(database.sql)).every((capability) => !capability.enabled)).toBe(
+      true,
+    );
   });
 });

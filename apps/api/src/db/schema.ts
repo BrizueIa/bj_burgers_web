@@ -2,7 +2,9 @@ import {
   boolean,
   integer,
   jsonb,
+  numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -141,6 +143,7 @@ export const mobileDevices = pgTable('mobile_devices', {
   pairingExpiresAt: timestamp('pairing_expires_at', { withTimezone: true }),
   pairingUsedAt: timestamp('pairing_used_at', { withTimezone: true }),
   active: boolean('active').notNull().default(true),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -161,6 +164,7 @@ export const orders = pgTable('orders', {
   deliveryCents: integer('delivery_cents').notNull().default(0),
   totalCents: integer('total_cents').notNull(),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -192,6 +196,7 @@ export const orderEvents = pgTable('order_events', {
   eventType: text('event_type').notNull(),
   status: text('status'),
   note: text('note').notNull().default(''),
+  deviceId: uuid('device_id').references(() => mobileDevices.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -221,6 +226,106 @@ export const auditLogs = pgTable('audit_logs', {
   action: text('action').notNull(),
   entity: text('entity').notNull(),
   entityId: text('entity_id'),
+  details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Tables introduced by migration 0004_business.sql. They are declared here so
+ * Drizzle's typed schema covers every persisted business record. */
+export const stockIngredients = pgTable('stock_ingredients', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  unit: text('unit').notNull(),
+  stock: numeric('stock', { precision: 16, scale: 3 }).notNull().default('0'),
+  valueCents: numeric('value_cents', { precision: 20, scale: 6 }).notNull().default('0'),
+  lastCost: numeric('last_cost', { precision: 20, scale: 6 }),
+  minimum: numeric('minimum', { precision: 16, scale: 3 }).notNull().default('0'),
+});
+
+export const productRecipes = pgTable('product_recipes', {
+  productId: text('product_id')
+    .primaryKey()
+    .references(() => products.id),
+  targetMargin: integer('target_margin').notNull().default(65),
+  overheadCents: integer('overhead_cents').notNull().default(0),
+});
+
+export const recipeLines = pgTable(
+  'recipe_lines',
+  {
+    productId: text('product_id')
+      .notNull()
+      .references(() => productRecipes.productId),
+    ingredientId: uuid('ingredient_id')
+      .notNull()
+      .references(() => stockIngredients.id),
+    quantity: numeric('quantity', { precision: 16, scale: 3 }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.productId, table.ingredientId] })],
+);
+
+export const businessEntries = pgTable('business_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  requestPayload: jsonb('request_payload').$type<Record<string, unknown>>().notNull(),
+  kind: text('kind').notNull(),
+  description: text('description').notNull(),
+  payment: text('payment').notNull().default(''),
+  totalCents: integer('total_cents').notNull(),
+  costCents: integer('cost_cents').notNull().default(0),
+  lines: jsonb('lines').$type<Record<string, unknown>[]>().notNull(),
+  deviceId: uuid('device_id')
+    .notNull()
+    .references(() => mobileDevices.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const stockMovements = pgTable('stock_movements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  entryId: uuid('entry_id')
+    .notNull()
+    .references(() => businessEntries.id),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  quantity: numeric('quantity', { precision: 16, scale: 3 }).notNull(),
+  valueCents: numeric('value_cents', { precision: 20, scale: 6 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const posCapabilities = pgTable('pos_capabilities', {
+  capability: text('capability').primaryKey(),
+  enabled: boolean('enabled').notNull().default(false),
+  updatedByUserId: uuid('updated_by_user_id').references(() => adminUsers.id),
+  activationNote: text('activation_note').notNull().default(''),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const idempotencyOperations = pgTable('idempotency_operations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  operation: text('operation').notNull(),
+  requestFingerprint: text('request_fingerprint').notNull(),
+  responseStatus: integer('response_status').notNull(),
+  responseBody: jsonb('response_body').$type<Record<string, unknown>>().notNull(),
+  actorKind: text('actor_kind').notNull(),
+  adminUserId: uuid('admin_user_id').references(() => adminUsers.id),
+  deviceId: uuid('device_id').references(() => mobileDevices.id),
+  origin: text('origin').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const operationAuditLogs = pgTable('operation_audit_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorKind: text('actor_kind').notNull(),
+  adminUserId: uuid('admin_user_id').references(() => adminUsers.id),
+  deviceId: uuid('device_id').references(() => mobileDevices.id),
+  origin: text('origin').notNull(),
+  action: text('action').notNull(),
+  entity: text('entity').notNull(),
+  entityId: text('entity_id'),
+  reason: text('reason').notNull().default(''),
+  idempotencyKey: uuid('idempotency_key'),
   details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
