@@ -1,0 +1,8 @@
+# The repository owner reviews all product and infrastructure changes.
+* @BrizueIa
+
+/apps/api/ @BrizueIa
+/apps/mobile/ @BrizueIa
+/packages/ @BrizueIa
+/docs/ @BrizueIa
+/.github/ @BrizueIa

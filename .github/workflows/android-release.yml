@@ -1,0 +1,64 @@
+name: Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: Notes shown with the build artifact.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Signed Android APK
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      BJ_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.BJ_ANDROID_KEYSTORE_PASSWORD }}
+      BJ_ANDROID_KEY_ALIAS: ${{ secrets.BJ_ANDROID_KEY_ALIAS }}
+      BJ_ANDROID_KEY_PASSWORD: ${{ secrets.BJ_ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore the protected signing key
+        shell: pwsh
+        run: |
+          $required = 'ANDROID_KEYSTORE_BASE64', 'BJ_ANDROID_KEYSTORE_PASSWORD', 'BJ_ANDROID_KEY_ALIAS', 'BJ_ANDROID_KEY_PASSWORD'
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing required production secret: $name"
+            }
+          }
+          $keystorePath = Join-Path $env:RUNNER_TEMP 'bj-operacion.jks'
+          [System.IO.File]::WriteAllBytes($keystorePath, [System.Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+          "BJ_ANDROID_KEYSTORE=$keystorePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - run: pnpm --filter @bj/mobile build:android
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bj-operacion-apk-${{ github.sha }}
+          path: apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -5,12 +5,17 @@ import { spinRedeemResponseSchema, type SpinRedeemResponse } from '@bj/contracts
 const segments = ['10%', '😢', '15%', '🎁', '😢', '🍟', '10%', '⭐', '😢', '20%', '🥤', '😢'];
 
 export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
+  const [hydrated, setHydrated] = useState(false);
   const [code, setCode] = useState('');
   const [status, setStatus] = useState('Ingresa el código que recibiste con tu pedido.');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SpinRedeemResponse | null>(null);
   const [rotation, setRotation] = useState(0);
   const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     if (result) dialogRef.current?.showModal();
@@ -83,7 +88,7 @@ export default function RouletteApp({ apiBaseUrl }: { apiBaseUrl: string }) {
     : '';
 
   return (
-    <section className="roulette-app">
+    <section className="roulette-app" data-hydrated={hydrated || undefined}>
       <div className="code-panel">
         <p className="eyebrow">Canje seguro</p>
         <h2>Ingresa tu código</h2>

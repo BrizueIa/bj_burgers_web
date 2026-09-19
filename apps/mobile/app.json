@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "B&J Operación",
+    "slug": "bj-operacion",
+    "version": "1.0.1",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "scheme": "bjoperacion",
+    "android": {
+      "package": "com.bjburgers.operacion",
+      "versionCode": 2,
+      "adaptiveIcon": { "backgroundColor": "#0a0d0b" }
+    },
+    "plugins": ["expo-router", "expo-secure-store", "./plugins/with-android-signing"],
+    "experiments": { "typedRoutes": true },
+    "extra": { "apiBaseUrl": "https://bj-40-233-29-16.sslip.io/api/v1" }
+  }
+}
