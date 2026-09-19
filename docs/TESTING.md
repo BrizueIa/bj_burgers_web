@@ -11,7 +11,7 @@ En PowerShell, inicia la base efímera y configura el entorno de pruebas:
 docker compose -f compose.test.yaml up -d --wait
 $env:DATABASE_URL = 'postgres://postgres:postgres@localhost:5433/bj_burgers_test'
 $env:TEST_DATABASE_URL = $env:DATABASE_URL
-$env:NODE_ENV = 'test'
+$env:NODE_ENV = 'development' # necesario para que Playwright inicie la API
 $env:WEB_ORIGINS = 'http://127.0.0.1:5173,http://127.0.0.1:4322'
 $env:PUBLIC_APP_ORIGIN = 'http://127.0.0.1:4322'
 $env:CODE_HMAC_SECRET = 'pruebas-locales-codigo-de-al-menos-32-caracteres'
