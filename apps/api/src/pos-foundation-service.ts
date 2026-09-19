@@ -65,12 +65,14 @@ export async function auditOperation(
 }
 
 export async function getCapabilities(sql: Sql): Promise<Capability[]> {
-  const rows = await sql<{ capability: CapabilityKey; enabled: boolean; updated_at: Date }[]>`
+  const rows = await sql<
+    { capability: CapabilityKey; enabled: boolean; updated_at: string | Date }[]
+  >`
     select capability, enabled, updated_at from pos_capabilities order by capability`;
   return rows.map((row) => ({
     key: row.capability,
     enabled: row.enabled,
-    updatedAt: row.updated_at.toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
   }));
 }
 
