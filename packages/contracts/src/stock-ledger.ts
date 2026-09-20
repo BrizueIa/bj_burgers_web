@@ -45,7 +45,16 @@ export const stockWasteRequestSchema = z.object({
 const stockMovementSchema = z.object({
   id: z.uuid(),
   ingredient_id: z.uuid(),
-  movement_type: z.enum(['initial', 'purchase', 'sale', 'waste', 'adjustment', 'count']),
+  movement_type: z.enum([
+    'initial',
+    'purchase',
+    'sale',
+    'waste',
+    'adjustment',
+    'count',
+    'production_consume',
+    'production_output',
+  ]),
   quantity_delta: z.string(),
   value_delta_cents: z.string(),
   stock_after: z.string(),

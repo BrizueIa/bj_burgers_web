@@ -11,7 +11,7 @@ import { colors, shared } from './theme';
 
 export type BusinessSection = 'home' | 'pos' | 'inventory' | 'recipes' | 'reports';
 export type BusinessMode =
-  'ingredient' | 'purchase' | 'sale' | 'waste' | 'count' | 'expense' | 'recipe';
+  'ingredient' | 'purchase' | 'sale' | 'waste' | 'count' | 'expense' | 'recipe' | 'production';
 const titles: Record<BusinessSection, string> = {
   home: 'Mi negocio',
   pos: 'Punto de venta',
@@ -272,6 +272,11 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
                 secondary
                 onPress={() => openEditor('recipe', product.id)}
               />
+              <Button
+                label="Registrar lote"
+                secondary
+                onPress={() => openEditor('production', product.id)}
+              />
             </Card>
           ))}
         </>
@@ -435,6 +440,24 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         idempotencyKey: createIdempotencyKey(),
       };
     }
+    if (mode === 'production') {
+      const output = Number(lineQuantity.replace(',', '.'));
+      if (!product || !Number.isFinite(output) || output <= 0) {
+        setMessage('Indica el rendimiento real del lote.');
+        return;
+      }
+      if (!description.trim()) {
+        setMessage('Indica el motivo o referencia del lote.');
+        return;
+      }
+      return {
+        idempotencyKey: createIdempotencyKey(),
+        productId: product.id,
+        outputQuantity: output.toFixed(3),
+        outputUnit: unit,
+        reason: description.trim(),
+      };
+    }
     if (!description.trim()) {
       setMessage(
         mode === 'expense' ? 'Describe el gasto.' : 'Escribe el proveedor, cliente o motivo.',
@@ -540,6 +563,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
             ),
           });
         else await api.saveRecipe(input as never);
+      } else if (mode === 'production') {
+        await api.createProductionBatch(input as never);
       } else if (mode === 'count') await api.countStock(input as never);
       else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
@@ -562,6 +587,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     count: 'Registrar conteo',
     expense: 'Registrar gasto',
     recipe: `Receta · ${product?.name ?? ''}`,
+    production: `Lote · ${product?.name ?? ''}`,
   }[mode];
   return (
     <ScrollScreen>
@@ -571,7 +597,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           ? 'El servidor confirma el precio y descuenta el inventario. Una respuesta incierta conserva esta misma operación para reintentarla.'
           : mode === 'recipe'
             ? 'El costo y precio sugerido se actualizarán usando las compras registradas.'
-            : ''}
+            : mode === 'production'
+              ? 'El servidor consumirá los insumos de la receta activa y registrará el costo del lote.'
+              : ''}
       </Text>
       {mode === 'ingredient' ? (
         <>
@@ -608,7 +636,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                   ? 'Descripción del gasto'
                   : mode === 'count'
                     ? 'Motivo del conteo'
-                    : 'Motivo de la merma'
+                    : mode === 'production'
+                      ? 'Motivo o referencia del lote'
+                      : 'Motivo de la merma'
           }
           value={description}
           onChangeText={setDescription}
@@ -661,6 +691,27 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
             value={price}
             onChangeText={setPrice}
           />
+        </>
+      ) : null}
+      {mode === 'production' ? (
+        <>
+          <Field
+            label="Rendimiento real"
+            keyboardType="decimal-pad"
+            value={lineQuantity}
+            onChangeText={setLineQuantity}
+          />
+          <Text style={shared.label}>Unidad de la preparación</Text>
+          <View style={styles.row}>
+            {(['g', 'ml', 'pz'] as const).map((value) => (
+              <Pill
+                key={value}
+                label={value}
+                selected={unit === value}
+                onPress={() => setUnit(value)}
+              />
+            ))}
+          </View>
         </>
       ) : null}
       {mode === 'expense' ? (

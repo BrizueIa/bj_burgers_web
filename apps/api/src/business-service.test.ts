@@ -20,6 +20,7 @@ import {
 import { createPurchase } from './purchasing-service.js';
 import { reversePurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
+import { createProductionBatch } from './production-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -85,6 +86,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0006_stock_ledger.sql',
       '0007_purchasing.sql',
       '0008_recipe_versions.sql',
+      '0009_production.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -99,7 +101,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -512,5 +514,48 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     expect(migrated.components).toMatchObject([
       { component_kind: 'ingredient', ingredient_id: ingredient, quantity: '150.000' },
     ]);
+  });
+  it('consume insumos y registra un lote preparado con el rendimiento real', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await purchase(1000, 15000);
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '200',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    const batch = await createProductionBatch(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        outputQuantity: '150',
+        outputUnit: 'g',
+        reason: 'Lote de prueba',
+      },
+      actor,
+    );
+    expect(batch.result).toMatchObject({ outputQuantity: '150', consumedCostCents: '3000.000000' });
+    const ledger = await stockLedgerState(sql);
+    expect(
+      ledger.ingredients.find((item) => item.id === batch.result.outputIngredientId),
+    ).toMatchObject({
+      stock: '150.000',
+      value_cents: '3000.000000',
+    });
+    expect(ledger.movements.map((item) => item.movement_type)).toContain('production_output');
   });
 });

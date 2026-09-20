@@ -14,6 +14,7 @@ import {
   supplierCreateSchema,
   presentationCreateSchema,
   purchaseCreateSchema,
+  productionBatchCreateSchema,
   recipeVersionCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
@@ -48,6 +49,7 @@ import {
 } from './stock-ledger-service.js';
 import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
+import { createProductionBatch } from './production-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -141,6 +143,17 @@ export async function registerOperator(
       .parse(request.query);
     reply.header('cache-control', 'no-store');
     return recipeVersionState(database.sql, productId);
+  });
+  app.post('/api/v1/operator/production/batches', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'production');
+    const outcome = await createProductionBatch(
+      database.sql,
+      productionBatchCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
   });
   app.post('/api/v1/operator/business/entries', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);

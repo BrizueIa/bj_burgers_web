@@ -6,3 +6,4 @@ export * from './foundation.js';
 export * from './stock-ledger.js';
 export * from './purchasing.js';
 export * from './recipe-versions.js';
+export * from './production.js';

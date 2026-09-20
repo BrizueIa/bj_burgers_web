@@ -241,6 +241,7 @@ export const stockIngredients = pgTable('stock_ingredients', {
   lastCost: numeric('last_cost', { precision: 20, scale: 6 }),
   minimum: numeric('minimum', { precision: 16, scale: 3 }).notNull().default('0'),
   reserved: numeric('reserved', { precision: 16, scale: 3 }).notNull().default('0'),
+  preparationProductId: text('preparation_product_id').references(() => products.id),
 });
 
 export const stockReservations = pgTable('stock_reservations', {
@@ -353,6 +354,26 @@ export const recipeVersionComponents = pgTable('recipe_version_components', {
   quantity: numeric('quantity', { precision: 16, scale: 3 }).notNull(),
   removable: boolean('removable').notNull().default(false),
   extra: boolean('extra').notNull().default(false),
+});
+
+export const productionBatches = pgTable('production_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  productId: text('product_id')
+    .notNull()
+    .references(() => products.id),
+  recipeVersionId: uuid('recipe_version_id')
+    .notNull()
+    .references(() => recipeVersions.id),
+  outputIngredientId: uuid('output_ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  outputQuantity: numeric('output_quantity', { precision: 16, scale: 3 }).notNull(),
+  outputUnit: text('output_unit').notNull(),
+  consumedCostCents: numeric('consumed_cost_cents', { precision: 20, scale: 6 }).notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const businessEntries = pgTable('business_entries', {
