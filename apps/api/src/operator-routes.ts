@@ -21,6 +21,8 @@ import {
   cashSessionOpenSchema,
   cashMovementSchema,
   cashSessionCloseSchema,
+  orderPaymentCreateSchema,
+  orderRefundCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -453,6 +455,33 @@ export async function registerOperator(
     return parseWhatsAppOrder(input.rawMessage, catalog);
   });
 
+  app.post('/api/v1/operator/orders/:id/payments', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await collectOrderPayment(
+      database.sql,
+      id,
+      orderPaymentCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/orders/:id/refunds', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await refundOrderPayment(
+      database.sql,
+      id,
+      orderRefundCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+
   app.get('/api/v1/operator/orders', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
     if (!context) return;
@@ -556,3 +585,5 @@ export async function registerOperator(
     });
   });
 }
+
+import { collectOrderPayment, refundOrderPayment } from './payment-service.js';

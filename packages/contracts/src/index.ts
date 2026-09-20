@@ -11,3 +11,4 @@ export * from './production.js';
 export * from './unified-orders.js';
 
 export * from './cash-sessions.js';
+export * from './payments.js';
