@@ -52,7 +52,7 @@ export async function createPurchase(sql: Sql, input: PurchaseCreate, actor: Aut
         const rows = await tx<
           { base_quantity: string; stock: string; value_cents: string }[]
         >`select p.base_quantity,i.stock::text,i.value_cents::text from ingredient_presentations p join stock_ingredients i on i.id=p.ingredient_id
-        where p.id=${line.presentationId} and p.ingredient_id=${line.ingredientId} and p.active=true for update of i,p`;
+        where p.id=${line.presentationId} and p.ingredient_id=${line.ingredientId} and p.active=true and (p.supplier_id is null or p.supplier_id=${input.supplierId}) for update of i,p`;
         const row = rows[0];
         if (!row)
           throw new PosFoundationError(
@@ -131,6 +131,7 @@ export async function reversePurchase(
       const lines = await tx<
         { ingredient_id: string; applied_base_quantity: string; inventory_value_cents: number }[]
       >`select ingredient_id,applied_base_quantity::text,inventory_value_cents from purchase_lines where purchase_id=${purchaseId} order by id`;
+      await tx`select id from stock_ingredients where id=any(${lines.map((line) => line.ingredient_id)}) order by id for update`;
       for (const line of lines) {
         const later =
           await tx`select id from stock_ledger_movements where ingredient_id=${line.ingredient_id} and created_at>${doc.created_at} limit 1`;

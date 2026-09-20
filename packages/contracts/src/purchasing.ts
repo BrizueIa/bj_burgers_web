@@ -38,6 +38,10 @@ export const purchaseCreateSchema = z
   .refine(
     (x) => new Set(x.lines.map((l) => l.ingredientId)).size === x.lines.length,
     'Ingrediente repetido',
+  )
+  .refine(
+    (x) => x.lines.reduce((sum, line) => sum + line.grossCents, 0) <= 100_000_000,
+    'El subtotal excede el límite.',
   );
 export const purchaseReversalSchema = z.object({
   idempotencyKey: z.uuid(),

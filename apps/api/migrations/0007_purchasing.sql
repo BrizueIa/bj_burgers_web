@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS purchase_lines (
   ingredient_id uuid NOT NULL REFERENCES stock_ingredients(id), presentation_id uuid NOT NULL REFERENCES ingredient_presentations(id),
   presentation_quantity numeric(16,3) NOT NULL CHECK(presentation_quantity > 0), applied_base_quantity numeric(16,3) NOT NULL CHECK(applied_base_quantity > 0),
   gross_cents integer NOT NULL CHECK(gross_cents > 0), allocated_discount_cents integer NOT NULL CHECK(allocated_discount_cents >= 0),
-  allocated_acquisition_cents integer NOT NULL CHECK(allocated_acquisition_cents >= 0), inventory_value_cents integer NOT NULL CHECK(inventory_value_cents > 0),
+  allocated_acquisition_cents integer NOT NULL CHECK(allocated_acquisition_cents >= 0), inventory_value_cents integer NOT NULL CHECK(inventory_value_cents >= 0),
   UNIQUE(purchase_id, ingredient_id)
 );
 CREATE TABLE IF NOT EXISTS purchase_reversals (
