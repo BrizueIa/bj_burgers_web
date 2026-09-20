@@ -3,6 +3,7 @@ import type { Catalog, OrderCreateRequest, OrderItemInput, OrderStatus } from '@
 import { calculateCart, COMBO_PRICE_CENTS } from '@bj/contracts';
 import type { Sql } from 'postgres';
 import { decryptSecret, digestCode, encryptSecret } from './security.js';
+import { appendMovement } from './stock-ledger-service.js';
 
 export class OrderError extends Error {
   constructor(
@@ -394,6 +395,38 @@ export async function updateOrderStatus(
           where id=${reservation.ingredient_id} and reserved>=${reservation.quantity}::numeric returning id`;
         if (!released[0]) throw new OrderError(409, 'La reserva ya no coincide con el inventario.');
         await tx`update stock_reservations set status='released',resolved_at=now(),reason=${note || 'Cancelación de comanda'} where id=${reservation.reservation_id}`;
+      }
+    }
+    if (nextStatus === 'preparing') {
+      const reservations = await tx<
+        { reservation_id: string; ingredient_id: string; quantity: string }[]
+      >`
+        select r.id as reservation_id,r.ingredient_id,r.quantity::text from order_stock_reservations x
+        join stock_reservations r on r.id=x.reservation_id where x.order_id=${orderId} and r.status='active'
+        order by r.ingredient_id for update`;
+      if (!reservations.length) throw new OrderError(409, 'La comanda no tiene reservas activas.');
+      for (const reservation of reservations) {
+        const [consumed] = await tx<
+          { stock: string; value_cents: string; cost: string }[]
+        >`with before as (select stock,reserved,value_cents from stock_ingredients where id=${reservation.ingredient_id})
+          update stock_ingredients i set stock=b.stock-${reservation.quantity}::numeric,
+            reserved=b.reserved-${reservation.quantity}::numeric,
+            value_cents=case when b.stock=${reservation.quantity}::numeric then 0 else b.value_cents-(b.value_cents/b.stock)*${reservation.quantity}::numeric end
+          from before b where i.id=${reservation.ingredient_id} and b.stock>=${reservation.quantity}::numeric and b.reserved>=${reservation.quantity}::numeric
+          returning i.stock::text,i.value_cents::text,(b.value_cents/b.stock*${reservation.quantity}::numeric)::text as cost`;
+        if (!consumed) throw new OrderError(409, 'La reserva ya no coincide con el inventario.');
+        await tx`update stock_reservations set status='consumed',resolved_at=now() where id=${reservation.reservation_id}`;
+        await appendMovement(tx as unknown as Sql, {
+          ingredientId: reservation.ingredient_id,
+          reservationId: reservation.reservation_id,
+          type: 'sale',
+          quantityDelta: `-${reservation.quantity}`,
+          valueDeltaCents: `-${consumed.cost}`,
+          stockAfter: consumed.stock,
+          valueAfterCents: consumed.value_cents,
+          reason: 'Consumo al preparar comanda unificada',
+          actor: { kind: 'device', deviceId, origin: 'android' },
+        });
       }
     }
     await tx`update orders set status=${nextStatus}, updated_at=now(),
