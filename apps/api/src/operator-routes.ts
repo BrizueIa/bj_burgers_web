@@ -18,6 +18,9 @@ import {
   recipeVersionCreateSchema,
   unifiedOrderQuoteSchema,
   unifiedOrderConfirmSchema,
+  cashSessionOpenSchema,
+  cashMovementSchema,
+  cashSessionCloseSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -54,6 +57,12 @@ import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
 import { calculateCart } from '@bj/contracts';
+import {
+  cashSessionState,
+  closeCashSession,
+  openCashSession,
+  recordCashMovement,
+} from './cash-session-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -159,6 +168,44 @@ export async function registerOperator(
     );
     return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
   });
+  app.get('/api/v1/operator/cash-session', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    return cashSessionState(database.sql);
+  });
+  app.post('/api/v1/operator/cash-session/open', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await openCashSession(database.sql, cashSessionOpenSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/cash-session/movements', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await recordCashMovement(database.sql, cashMovementSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/cash-session/close', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await closeCashSession(
+      database.sql,
+      cashSessionCloseSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+
   app.post('/api/v1/operator/unified-orders/quote', async (request, reply) => {
     if (!(await protectOperator(request, reply, database, config))) return;
     const input = unifiedOrderQuoteSchema.parse(request.body);

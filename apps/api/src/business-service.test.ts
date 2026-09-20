@@ -23,6 +23,12 @@ import { createRecipeVersion, recipeVersionState } from './recipe-version-servic
 import { createProductionBatch } from './production-service.js';
 import { createUnifiedOrder, InMemoryOrderNotifier, updateOrderStatus } from './order-service.js';
 import { seedCatalog } from '@bj/contracts';
+import {
+  cashSessionState,
+  closeCashSession,
+  openCashSession,
+  recordCashMovement,
+} from './cash-session-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -90,6 +96,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0008_recipe_versions.sql',
       '0009_production.sql',
       '0010_unified_orders.sql',
+      '0011_cash_sessions.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -208,6 +215,40 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     const [allocation] = await sql<{ classification: string; cost_cents: string }[]>`
       select classification,cost_cents::text from order_cost_allocations where order_id=${created.order.id}`;
     expect(allocation).toEqual({ classification: 'waste', cost_cents: '1500.000000' });
+  });
+
+  it('mantiene una sola caja abierta y concilia movimientos idempotentes', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const opened = await openCashSession(
+      sql,
+      { idempotencyKey: randomUUID(), openingFundCents: 500 },
+      actor,
+    );
+    await expect(
+      openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor),
+    ).rejects.toThrow('abierto');
+    const key = randomUUID();
+    await recordCashMovement(
+      sql,
+      { idempotencyKey: key, kind: 'income', amountCents: 1000, reason: 'Fondo adicional' },
+      actor,
+    );
+    await recordCashMovement(
+      sql,
+      { idempotencyKey: key, kind: 'income', amountCents: 1000, reason: 'Fondo adicional' },
+      actor,
+    );
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 1500 });
+    const closed = await closeCashSession(
+      sql,
+      { idempotencyKey: randomUUID(), countedCents: 1450, note: 'Diferencia' },
+      actor,
+    );
+    expect(closed.result).toMatchObject({
+      id: opened.result.session!.id,
+      expectedCents: 1500,
+      differenceCents: -50,
+    });
   });
 
   it('no inventa costos para ingredientes sin compras', async () => {
