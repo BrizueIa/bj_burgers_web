@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   BadgeDollarSign,
   Clock3,
+  ClipboardList,
   Gift,
   LayoutDashboard,
   LoaderCircle,
@@ -11,9 +12,9 @@ import {
   Smartphone,
   Tags,
 } from 'lucide-react';
-import type { BusinessSettings, PromotionRule } from '@bj/contracts';
+import type { BusinessSettings, PromotionRule, StockLedgerState } from '@bj/contracts';
 
-type Tab = 'overview' | 'menu' | 'promotions' | 'business' | 'roulette' | 'devices';
+type Tab = 'overview' | 'menu' | 'promotions' | 'business' | 'inventory' | 'roulette' | 'devices';
 type CategoryRow = {
   id: string;
   name: string;
@@ -90,6 +91,7 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'menu', label: 'Menú', icon: ShoppingBag },
   { id: 'promotions', label: 'Promociones', icon: Tags },
   { id: 'business', label: 'Negocio', icon: Clock3 },
+  { id: 'inventory', label: 'Inventario', icon: ClipboardList },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
   { id: 'devices', label: 'Dispositivos', icon: Smartphone },
 ];
@@ -124,6 +126,87 @@ function formatDate(value: string) {
     timeStyle: 'short',
     timeZone: 'America/Mexico_City',
   }).format(new Date(value));
+}
+
+function InventoryLedger({ data }: { data: StockLedgerState | null }) {
+  if (!data) return <p>Cargando inventario…</p>;
+  return (
+    <div className="settings-grid">
+      <section className="admin-card">
+        <p className="eyebrow">Libro mayor</p>
+        <h2>Existencia, reservas y disponibilidad</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Ingrediente</th>
+                <th>Físico</th>
+                <th>Reservado</th>
+                <th>Disponible</th>
+                <th>Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.ingredients.length ? (
+                data.ingredients.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.name}</td>
+                    <td>
+                      {item.stock} {item.unit}
+                    </td>
+                    <td>
+                      {item.reserved} {item.unit}
+                    </td>
+                    <td>
+                      {item.available} {item.unit}
+                    </td>
+                    <td>{formatMoney(Number(item.value_cents))}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5}>Todavía no hay ingredientes.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="admin-card">
+        <h2>Movimientos recientes</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Tipo</th>
+                <th>Cantidad</th>
+                <th>Saldo</th>
+                <th>Motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.movements.length ? (
+                data.movements.map((movement) => (
+                  <tr key={movement.id}>
+                    <td>{formatDate(movement.created_at)}</td>
+                    <td>{movement.movement_type}</td>
+                    <td>{movement.quantity_delta}</td>
+                    <td>{movement.stock_after}</td>
+                    <td>{movement.reason || '—'}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5}>El saldo inicial aparecerá al migrar existencias.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function Login({ onAuthenticated }: { onAuthenticated: (token: string) => void }) {
@@ -997,12 +1080,17 @@ function Devices({
 export default function App() {
   const [csrf, setCsrf] = useState('');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [inventoryLedger, setInventoryLedger] = useState<StockLedgerState | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   async function load(showNotice = false) {
-    const data = await request<Dashboard>('/api/v1/admin/dashboard');
+    const [data, ledger] = await Promise.all([
+      request<Dashboard>('/api/v1/admin/dashboard'),
+      request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
+    ]);
     setDashboard(data);
+    setInventoryLedger(ledger);
     if (showNotice) {
       setNotice('Cambios guardados. La web pública se actualizará automáticamente.');
       window.setTimeout(() => setNotice(''), 4000);
@@ -1182,6 +1270,7 @@ export default function App() {
         {tab === 'business' && (
           <BusinessEditor value={dashboard.business.data} csrf={csrf} onSaved={() => load(true)} />
         )}
+        {tab === 'inventory' && <InventoryLedger data={inventoryLedger} />}
         {tab === 'roulette' && (
           <Roulette
             prizes={dashboard.prizes}

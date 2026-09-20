@@ -7,12 +7,20 @@ import {
   orderResponseSchema,
   ordersResponseSchema,
   spinCodeIssueResponseSchema,
+  stockLedgerStateSchema,
+  stockMutationResponseSchema,
+  stockReservationReleaseResponseSchema,
+  stockReservationResponseSchema,
   type BusinessState,
   type Capability,
   type Order,
   type OrderCreateRequest,
   type OrderDraft,
   type OrderStatus,
+  type StockCountRequest,
+  type StockReservationRequest,
+  type StockReservationResolveRequest,
+  type StockWasteRequest,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -233,6 +241,32 @@ export class BjApiClient {
       z.object({ entry: z.unknown(), reused: z.boolean() }),
       input,
     );
+  }
+
+  stockLedger(limit = 100, cursor?: string) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    return this.request(`/operator/inventory/ledger?${query}`, stockLedgerStateSchema);
+  }
+
+  reserveStock(input: StockReservationRequest) {
+    return this.post('/operator/inventory/reservations', stockReservationResponseSchema, input);
+  }
+
+  releaseStockReservation(reservationId: string, input: StockReservationResolveRequest) {
+    return this.post(
+      `/operator/inventory/reservations/${reservationId}/release`,
+      stockReservationReleaseResponseSchema,
+      input,
+    );
+  }
+
+  countStock(input: StockCountRequest) {
+    return this.post('/operator/inventory/counts', stockMutationResponseSchema, input);
+  }
+
+  writeOffStock(input: StockWasteRequest) {
+    return this.post('/operator/inventory/write-offs', stockMutationResponseSchema, input);
   }
 
   /** Reads an authenticated SSE stream until it closes or is aborted. */

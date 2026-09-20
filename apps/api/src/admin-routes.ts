@@ -6,6 +6,7 @@ import cookie from '@fastify/cookie';
 import staticPlugin from '@fastify/static';
 import { verify } from '@node-rs/argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import {
   businessSettingsSchema,
   categorySchema,
@@ -16,6 +17,7 @@ import {
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
 import { createOpaqueToken, digestToken } from './security.js';
+import { stockLedgerState } from './stock-ledger-service.js';
 
 interface AdminContext {
   userId: string;
@@ -150,6 +152,19 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       redemptions,
       devices,
     };
+  });
+
+  app.get('/api/v1/admin/inventory/ledger', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const { limit, cursor } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(100),
+        cursor: z.uuid().optional(),
+      })
+      .parse(request.query);
+    reply.header('cache-control', 'no-store');
+    return stockLedgerState(database.sql, limit, cursor);
   });
 
   app.post('/api/v1/admin/devices', async (request, reply) => {

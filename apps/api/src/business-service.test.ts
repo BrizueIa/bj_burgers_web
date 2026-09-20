@@ -10,6 +10,13 @@ import {
   recipeSchema,
   saveRecipe,
 } from './business-service.js';
+import {
+  countStock,
+  releaseStockReservation,
+  reserveStock,
+  stockLedgerState,
+  writeOffStock,
+} from './stock-ledger-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -72,6 +79,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0003_operator_orders.sql',
       '0004_business.sql',
       '0005_pos_foundation.sql',
+      '0006_stock_ledger.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -86,7 +94,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -245,5 +253,111 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     await expect(purchase(2000, 10000, key)).rejects.toThrow('otra operación');
     await expect(sale(1, randomUUID(), 9999)).rejects.toThrow('El precio cambió');
     expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
+  });
+  it('persiste reservas y evita que dos operaciones tomen la misma disponibilidad', async () => {
+    await purchase(1000, 10000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const first = await reserveStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '800',
+        referenceType: 'test',
+        referenceId: 'one',
+        reason: 'Prueba de reserva',
+      },
+      actor,
+    );
+    expect(first.result.ingredient.available).toBe('200.000');
+    await expect(
+      reserveStock(
+        sql,
+        {
+          idempotencyKey: randomUUID(),
+          ingredientId: ingredient,
+          quantity: '201',
+          referenceType: 'test',
+          referenceId: 'two',
+          reason: 'Prueba concurrente',
+        },
+        actor,
+      ),
+    ).rejects.toThrow('disponible');
+    await releaseStockReservation(
+      sql,
+      first.result.reservation.id,
+      {
+        idempotencyKey: randomUUID(),
+        reason: 'Cancelación de prueba',
+      },
+      actor,
+    );
+    expect((await stockLedgerState(sql)).ingredients[0]).toMatchObject({
+      stock: '1000.000',
+      reserved: '0.000',
+    });
+  });
+  it('impide conteos con reservas y conserva un movimiento valorizado para merma', async () => {
+    await purchase(1000, 10000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const reservation = await reserveStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '100',
+        referenceType: 'test',
+        referenceId: 'count',
+        reason: 'Reserva de conteo',
+      },
+      actor,
+    );
+    await expect(
+      countStock(
+        sql,
+        {
+          idempotencyKey: randomUUID(),
+          ingredientId: ingredient,
+          countedQuantity: '900',
+          reason: 'Conteo semanal',
+        },
+        actor,
+      ),
+    ).rejects.toThrow('reservas');
+    await releaseStockReservation(
+      sql,
+      reservation.result.reservation.id,
+      {
+        idempotencyKey: randomUUID(),
+        reason: 'Liberar antes de conteo',
+      },
+      actor,
+    );
+    await countStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        countedQuantity: '900',
+        reason: 'Conteo semanal',
+      },
+      actor,
+    );
+    await writeOffStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '100',
+        reason: 'Producto vencido',
+        cause: 'expired',
+      },
+      actor,
+    );
+    const ledger = await stockLedgerState(sql);
+    expect(ledger.ingredients[0]).toMatchObject({ stock: '800.000', value_cents: '8000.000000' });
+    expect(ledger.movements.map((item) => item.movement_type)).toContain('count');
+    expect(ledger.movements.map((item) => item.movement_type)).toContain('waste');
   });
 });

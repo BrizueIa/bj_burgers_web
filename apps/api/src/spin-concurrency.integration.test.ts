@@ -7,6 +7,7 @@ import { requireTestDatabaseUrl } from './db/test-database.js';
 import { digestCode } from './security.js';
 import { redeemSpin } from './spin-service.js';
 import { getCapabilities, runIdempotent } from './pos-foundation-service.js';
+import { reserveStock } from './stock-ledger-service.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const secret = 'secreto-de-integracion-con-mas-de-treinta-y-dos-caracteres';
@@ -26,6 +27,7 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0003_operator_orders.sql',
       '0004_business.sql',
       '0005_pos_foundation.sql',
+      '0006_stock_ledger.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into prizes (id, label, emoji, weight, active, inventory, target_segments)
@@ -132,5 +134,36 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
     expect((await getCapabilities(database.sql)).every((capability) => !capability.enabled)).toBe(
       true,
     );
+  });
+
+  it('dos conexiones no pueden reservar la última existencia disponible', async () => {
+    const deviceId = randomUUID();
+    const ingredientId = randomUUID();
+    await database.sql`insert into mobile_devices(id,name) values(${deviceId}, 'Inventario concurrente')`;
+    await database.sql`insert into stock_ingredients(id,name,unit,stock,value_cents)
+      values(${ingredientId}, ${`Ingrediente ${ingredientId}`}, 'pz', 1, 100)`;
+    const actor = { kind: 'device' as const, deviceId, origin: 'android' as const };
+    const results = await Promise.allSettled(
+      ['uno', 'dos'].map((referenceId) =>
+        reserveStock(
+          database.sql,
+          {
+            idempotencyKey: randomUUID(),
+            ingredientId,
+            quantity: '1.000',
+            referenceType: 'integration-test',
+            referenceId,
+            reason: 'Última pieza',
+          },
+          actor,
+        ),
+      ),
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const [balance] = await database.sql<{ stock: string; reserved: string; active: number }[]>`
+      select i.stock::text, i.reserved::text,
+        (select count(*)::int from stock_reservations where ingredient_id=i.id and status='active') as active
+      from stock_ingredients i where i.id=${ingredientId}`;
+    expect(balance).toEqual({ stock: '1.000', reserved: '1.000', active: 1 });
   });
 });

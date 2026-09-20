@@ -240,6 +240,41 @@ export const stockIngredients = pgTable('stock_ingredients', {
   valueCents: numeric('value_cents', { precision: 20, scale: 6 }).notNull().default('0'),
   lastCost: numeric('last_cost', { precision: 20, scale: 6 }),
   minimum: numeric('minimum', { precision: 16, scale: 3 }).notNull().default('0'),
+  reserved: numeric('reserved', { precision: 16, scale: 3 }).notNull().default('0'),
+});
+
+export const stockReservations = pgTable('stock_reservations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  quantity: numeric('quantity', { precision: 16, scale: 3 }).notNull(),
+  status: text('status').notNull(),
+  referenceType: text('reference_type').notNull().default(''),
+  referenceId: text('reference_id').notNull().default(''),
+  reason: text('reason').notNull().default(''),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+});
+
+export const stockLedgerMovements = pgTable('stock_ledger_movements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  businessEntryId: uuid('business_entry_id').references(() => businessEntries.id),
+  reservationId: uuid('reservation_id').references(() => stockReservations.id),
+  movementType: text('movement_type').notNull(),
+  quantityDelta: numeric('quantity_delta', { precision: 16, scale: 3 }).notNull(),
+  valueDeltaCents: numeric('value_delta_cents', { precision: 20, scale: 6 }).notNull(),
+  stockAfter: numeric('stock_after', { precision: 16, scale: 3 }).notNull(),
+  valueAfterCents: numeric('value_after_cents', { precision: 20, scale: 6 }).notNull(),
+  reason: text('reason').notNull().default(''),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const productRecipes = pgTable('product_recipes', {
