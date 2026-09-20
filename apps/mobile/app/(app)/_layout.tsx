@@ -12,6 +12,7 @@ const nav = [
   ['POS', '/(app)/pos'],
   ['Inventario', '/(app)/inventory'],
   ['Recetas', '/(app)/recipes'],
+  ['Caja', '/(app)/cash'],
   ['Reportes', '/(app)/reports'],
 ] as const;
 

@@ -30,6 +30,11 @@ import {
   type RecipeVersionState,
   unifiedOrderQuoteResponseSchema,
   type UnifiedOrderConfirm,
+  cashSessionStateSchema,
+  type CashMovement,
+  type CashSessionClose,
+  type CashSessionOpen,
+  type CashSessionState,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -264,6 +269,31 @@ export class BjApiClient {
   confirmUnifiedOrder(input: UnifiedOrderConfirm) {
     return this.post('/operator/unified-orders', orderResponseSchema, input).then(
       (result) => result.order,
+    );
+  }
+
+  cashSession(): Promise<CashSessionState> {
+    return this.request('/operator/cash-session', cashSessionStateSchema);
+  }
+
+  openCashSession(input: CashSessionOpen) {
+    return this.post('/operator/cash-session/open', cashSessionStateSchema, input);
+  }
+
+  recordCashMovement(input: CashMovement) {
+    return this.post('/operator/cash-session/movements', cashSessionStateSchema, input);
+  }
+
+  closeCashSession(input: CashSessionClose) {
+    return this.post(
+      '/operator/cash-session/close',
+      z.object({
+        id: z.string().uuid(),
+        expectedCents: z.number().int(),
+        countedCents: z.number().int(),
+        differenceCents: z.number().int(),
+      }),
+      input,
     );
   }
 
