@@ -67,7 +67,15 @@ async function appendMovement(
   tx: Sql,
   input: {
     ingredientId: string;
-    type: 'initial' | 'purchase' | 'sale' | 'waste' | 'adjustment' | 'count';
+    type:
+      | 'initial'
+      | 'purchase'
+      | 'sale'
+      | 'waste'
+      | 'adjustment'
+      | 'count'
+      | 'production_consume'
+      | 'production_output';
     quantityDelta: string;
     valueDeltaCents: string;
     stockAfter: string;
@@ -317,7 +325,15 @@ export async function stockLedgerState(
           Array<{
             id: string;
             ingredient_id: string;
-            movement_type: 'initial' | 'purchase' | 'sale' | 'waste' | 'adjustment' | 'count';
+            movement_type:
+              | 'initial'
+              | 'purchase'
+              | 'sale'
+              | 'waste'
+              | 'adjustment'
+              | 'count'
+              | 'production_consume'
+              | 'production_output';
             quantity_delta: string | number;
             value_delta_cents: string | number;
             stock_after: string | number;
@@ -333,7 +349,15 @@ export async function stockLedgerState(
           Array<{
             id: string;
             ingredient_id: string;
-            movement_type: 'initial' | 'purchase' | 'sale' | 'waste' | 'adjustment' | 'count';
+            movement_type:
+              | 'initial'
+              | 'purchase'
+              | 'sale'
+              | 'waste'
+              | 'adjustment'
+              | 'count'
+              | 'production_consume'
+              | 'production_output';
             quantity_delta: string | number;
             value_delta_cents: string | number;
             stock_after: string | number;

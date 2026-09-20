@@ -14,6 +14,7 @@ import {
   productSchema,
   promotionSchema,
   recipeVersionCreateSchema,
+  productionBatchCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -21,6 +22,7 @@ import { createOpaqueToken, digestToken } from './security.js';
 import { stockLedgerState } from './stock-ledger-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { requireCapability } from './pos-foundation-service.js';
+import { createProductionBatch } from './production-service.js';
 
 interface AdminContext {
   userId: string;
@@ -190,6 +192,25 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     return reply
       .code(outcome.statusCode)
       .send(Object.assign({}, outcome.result, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/admin/production/batches', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    reply.header('cache-control', 'no-store');
+    const batches =
+      await database.sql`select b.*,p.name as product_name from production_batches b join products p on p.id=b.product_id order by b.created_at desc limit 100`;
+    return { batches };
+  });
+  app.post('/api/v1/admin/production/batches', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'production');
+    const outcome = await createProductionBatch(
+      database.sql,
+      productionBatchCreateSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
   });
   app.get('/api/v1/admin/purchasing', async (request, reply) => {
     const context = await protect(request, reply);

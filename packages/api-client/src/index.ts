@@ -24,7 +24,9 @@ import {
   type PurchaseCreate,
   recipeVersionMutationResponseSchema,
   recipeVersionStateSchema,
+  productionBatchResponseSchema,
   type RecipeVersionCreate,
+  type ProductionBatchCreate,
   type RecipeVersionState,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
@@ -247,6 +249,10 @@ export class BjApiClient {
   recipeVersions(productId?: string): Promise<RecipeVersionState> {
     const query = productId ? `?productId=${encodeURIComponent(productId)}` : '';
     return this.request(`/operator/recipes/versions${query}`, recipeVersionStateSchema);
+  }
+
+  createProductionBatch(input: ProductionBatchCreate) {
+    return this.post('/operator/production/batches', productionBatchResponseSchema, input);
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {
