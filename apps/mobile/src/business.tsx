@@ -10,7 +10,8 @@ import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle 
 import { colors, shared } from './theme';
 
 export type BusinessSection = 'home' | 'pos' | 'inventory' | 'recipes' | 'reports';
-export type BusinessMode = 'ingredient' | 'purchase' | 'sale' | 'waste' | 'expense' | 'recipe';
+export type BusinessMode =
+  'ingredient' | 'purchase' | 'sale' | 'waste' | 'count' | 'expense' | 'recipe';
 const titles: Record<BusinessSection, string> = {
   home: 'Mi negocio',
   pos: 'Punto de venta',
@@ -101,6 +102,9 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
   const lowStock = data.ingredients.filter(
     (ingredient) => numberValue(ingredient.stock) <= numberValue(ingredient.minimum),
   ).length;
+  const stockLedgerEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'stock_ledger' && capability.enabled,
+  );
   const openEditor = (mode: BusinessMode, productId?: string) =>
     router.push({
       pathname: '/(app)/business/[mode]',
@@ -199,7 +203,16 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             <Button label="Ingrediente" onPress={() => openEditor('ingredient')} />
             <Button label="Compra" secondary onPress={() => openEditor('purchase')} />
             <Button label="Merma" secondary onPress={() => openEditor('waste')} />
+            {stockLedgerEnabled ? (
+              <Button label="Conteo" secondary onPress={() => openEditor('count')} />
+            ) : null}
           </View>
+          {!stockLedgerEnabled ? (
+            <Notice kind="warning">
+              El libro mayor está integrado, pero los conteos y reservas se habilitan después de
+              conciliar las existencias actuales.
+            </Notice>
+          ) : null}
           <Metric
             label="Valor actual del inventario"
             value={money(
@@ -226,6 +239,9 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
                 <Text style={shared.subtitle}>
                   {quantity(ingredient.stock)} {ingredient.unit} · mínimo{' '}
                   {quantity(ingredient.minimum)}
+                  {numberValue(ingredient.reserved) > 0
+                    ? `\nReservado ${quantity(ingredient.reserved)} · disponible ${quantity(numberValue(ingredient.stock) - numberValue(ingredient.reserved))}`
+                    : ''}
                   {ingredient.unit_cost === null
                     ? '\nSin costo: registra una compra'
                     : `\nCosto promedio ${money(ingredient.unit_cost)} / ${ingredient.unit}`}
@@ -354,7 +370,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     );
   const source = mode === 'sale' ? data.products : data.ingredients;
   const selected = source.find((item) => item.id === selectedId);
-  const requiresLines = mode === 'purchase' || mode === 'sale' || mode === 'recipe';
+  const requiresLines =
+    mode === 'purchase' || mode === 'sale' || mode === 'recipe' || mode === 'count';
   const addLine = () => {
     setMessage(undefined);
     const quantityValue = Number(lineQuantity.replace(',', '.'));
@@ -369,6 +386,10 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     }
     if (lines.some((line) => line.id === selected.id)) {
       setMessage('Ese artículo ya está agregado.');
+      return;
+    }
+    if (mode === 'count' && lines.length) {
+      setMessage('Un conteo confirma un ingrediente a la vez.');
       return;
     }
     setLines((current) => [
@@ -438,6 +459,20 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         idempotencyKey: createIdempotencyKey(),
       };
     }
+    if (mode === 'count') {
+      const line = lines[0];
+      if (!line) {
+        setMessage('Selecciona un ingrediente y registra la cantidad contada.');
+        return;
+      }
+      return {
+        ingredientId: line.id,
+        countedQuantity: line.quantity.toFixed(3),
+        ...(lineTotal.trim() ? { unitCostCents: String(centsFromInput(lineTotal)) } : {}),
+        reason: description.trim(),
+        idempotencyKey: createIdempotencyKey(),
+      };
+    }
     if (!lines.length) {
       setMessage('Agrega al menos una línea.');
       return;
@@ -479,6 +514,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           input as { name: string; unit: 'g' | 'ml' | 'pz'; minimum: number },
         );
       else if (mode === 'recipe') await api.saveRecipe(input as never);
+      else if (mode === 'count') await api.countStock(input as never);
       else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
       router.back();
@@ -497,6 +533,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     purchase: 'Registrar compra',
     sale: 'Cobrar venta',
     waste: 'Registrar merma',
+    count: 'Registrar conteo',
     expense: 'Registrar gasto',
     recipe: `Receta · ${product?.name ?? ''}`,
   }[mode];
@@ -543,7 +580,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 ? 'Cliente o referencia de venta'
                 : mode === 'expense'
                   ? 'Descripción del gasto'
-                  : 'Motivo de la merma'
+                  : mode === 'count'
+                    ? 'Motivo del conteo'
+                    : 'Motivo de la merma'
           }
           value={description}
           onChangeText={setDescription}
@@ -595,6 +634,14 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       {mode === 'expense' ? (
         <Field
           label="Importe (MXN)"
+          keyboardType="decimal-pad"
+          value={lineTotal}
+          onChangeText={setLineTotal}
+        />
+      ) : null}
+      {mode === 'count' ? (
+        <Field
+          label="Costo unitario para sobrante, si aplica (MXN)"
           keyboardType="decimal-pad"
           value={lineTotal}
           onChangeText={setLineTotal}

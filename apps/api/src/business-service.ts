@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Sql, JSONValue } from 'postgres';
 import { OrderError } from './order-service.js';
+import { appendMovement } from './stock-ledger-service.js';
 
 const quantity = z.number().positive().max(1000000).multipleOf(0.001);
 const cents = z.number().int().min(0).max(100000000);
@@ -82,18 +83,32 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
       return { entry: previous[0], reused: true };
     }
     const snapshots: Record<string, unknown>[] = [];
-    const movements: { id: string; quantity: string | number; value: string | number }[] = [];
+    const movements: {
+      id: string;
+      quantity: string | number;
+      value: string | number;
+      stockAfter: string | number;
+      valueAfter: string | number;
+      type: 'purchase' | 'sale' | 'waste';
+    }[] = [];
     let total = 0;
     let cost = 0;
     if (input.kind === 'purchase') {
       for (const line of input.lines) {
         const rows = await tx`update stock_ingredients set stock=stock+${line.quantity},
           value_cents=value_cents+${line.totalCents}, last_cost=${line.totalCents}::numeric/${line.quantity}
-          where id=${line.ingredientId} returning name, unit`;
+          where id=${line.ingredientId} returning name, unit, stock::text as stock_after, value_cents::text as value_after`;
         if (!rows[0]) throw new OrderError(404, 'Ingrediente inexistente.');
         total += line.totalCents;
         snapshots.push({ ...line, ...rows[0] });
-        movements.push({ id: line.ingredientId, quantity: line.quantity, value: line.totalCents });
+        movements.push({
+          id: line.ingredientId,
+          quantity: line.quantity,
+          value: line.totalCents,
+          stockAfter: rows[0].stock_after,
+          valueAfter: rows[0].value_after,
+          type: 'purchase',
+        });
       }
     }
     if (input.kind === 'sale') {
@@ -112,8 +127,9 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
             select *, ${ingredient.quantity}::numeric*${line.quantity} as needed from stock_ingredients where id=${ingredient.ingredient_id} for update
           ) update stock_ingredients i set stock=b.stock-b.needed,
             value_cents=greatest(0,b.value_cents-(b.value_cents/nullif(b.stock,0))*b.needed)
-            from before b where i.id=b.id and b.stock>=b.needed and b.stock>0 and b.last_cost is not null
-            returning b.needed::text as quantity, (b.value_cents/b.stock*b.needed)::text as cost`;
+            from before b where i.id=b.id and b.stock-b.reserved>=b.needed and b.stock>0 and b.last_cost is not null
+            returning b.needed::text as quantity, (b.value_cents/b.stock*b.needed)::text as cost,
+              i.stock::text as stock_after, i.value_cents::text as value_after`;
           if (!consumed[0])
             throw new OrderError(409, `Existencia o costo insuficiente: ${ingredient.name}.`);
           ingredients.push({
@@ -126,6 +142,9 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
             id: ingredient.ingredient_id,
             quantity: `-${consumed[0].quantity}`,
             value: `-${consumed[0].cost}`,
+            stockAfter: consumed[0].stock_after,
+            valueAfter: consumed[0].value_after,
+            type: 'sale',
           });
         }
         const [costRow] =
@@ -149,8 +168,9 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
         await tx`with before as (select * from stock_ingredients where id=${input.ingredientId} for update)
         update stock_ingredients i set stock=b.stock-${input.quantity},
         value_cents=greatest(0,b.value_cents-b.value_cents/nullif(b.stock,0)*${input.quantity})
-        from before b where i.id=b.id and b.stock>=${input.quantity} and b.stock>0
-        returning b.name, (b.value_cents/b.stock*${input.quantity})::text as cost`;
+        from before b where i.id=b.id and b.stock-b.reserved>=${input.quantity} and b.stock>0
+        returning b.name, (b.value_cents/b.stock*${input.quantity})::text as cost,
+          i.stock::text as stock_after, i.value_cents::text as value_after`;
       if (!rows[0]) throw new OrderError(409, 'Existencia insuficiente.');
       cost = Math.round(Number(rows[0].cost));
       snapshots.push({ ingredientId: input.ingredientId, quantity: input.quantity, ...rows[0] });
@@ -158,6 +178,9 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
         id: input.ingredientId,
         quantity: -input.quantity,
         value: `-${rows[0].cost}`,
+        stockAfter: rows[0].stock_after,
+        valueAfter: rows[0].value_after,
+        type: 'waste',
       });
     }
     if (input.kind === 'expense') total = input.totalCents;
@@ -171,8 +194,20 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
     const [entry] =
       await tx`insert into business_entries(idempotency_key,request_payload,kind,description,payment,total_cents,cost_cents,lines,device_id)
       values(${input.idempotencyKey},${tx.json(input)},${input.kind},${input.description},${input.kind === 'sale' ? input.payment : ''},${total},${cost},${tx.json(snapshots as JSONValue)},${deviceId}) returning *`;
-    for (const m of movements)
+    for (const m of movements) {
       await tx`insert into stock_movements(entry_id,ingredient_id,quantity,value_cents) values(${entry!.id},${m.id},${m.quantity},${m.value})`;
+      await appendMovement(tx as unknown as Sql, {
+        ingredientId: m.id,
+        businessEntryId: entry!.id,
+        type: m.type,
+        quantityDelta: String(m.quantity),
+        valueDeltaCents: String(m.value),
+        stockAfter: String(m.stockAfter),
+        valueAfterCents: String(m.valueAfter),
+        reason: input.description,
+        actor: { kind: 'device', deviceId, origin: 'android' },
+      });
+    }
     return { entry, reused: false };
   });
 }

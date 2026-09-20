@@ -7,6 +7,10 @@ import {
   orderStatusSchema,
   orderStatusUpdateSchema,
   spinCodeIssueRequestSchema,
+  stockCountRequestSchema,
+  stockReservationRequestSchema,
+  stockReservationResolveRequestSchema,
+  stockWasteRequestSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -30,6 +34,14 @@ import {
   recordEntry,
   saveRecipe,
 } from './business-service.js';
+import { requireCapability } from './pos-foundation-service.js';
+import {
+  countStock,
+  releaseStockReservation,
+  reserveStock,
+  stockLedgerState,
+  writeOffStock,
+} from './stock-ledger-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -99,6 +111,74 @@ export async function registerOperator(
     const context = await protectOperator(request, reply, database, config);
     if (!context) return;
     return recordEntry(database.sql, entrySchema.parse(request.body), context.deviceId);
+  });
+  app.get('/api/v1/operator/inventory/ledger', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    await requireCapability(database.sql, 'stock_ledger');
+    const { limit, cursor } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(100),
+        cursor: z.uuid().optional(),
+      })
+      .parse(request.query);
+    return stockLedgerState(database.sql, limit, cursor);
+  });
+  app.post('/api/v1/operator/inventory/reservations', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'stock_ledger');
+    const outcome = await reserveStock(
+      database.sql,
+      stockReservationRequestSchema.parse(request.body),
+      {
+        kind: 'device',
+        deviceId: context.deviceId,
+        origin: 'android',
+      },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/operator/inventory/reservations/:id/release', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'stock_ledger');
+    const outcome = await releaseStockReservation(
+      database.sql,
+      z.uuid().parse((request.params as { id: string }).id),
+      stockReservationResolveRequestSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/operator/inventory/counts', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'stock_ledger');
+    const outcome = await countStock(database.sql, stockCountRequestSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/operator/inventory/write-offs', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'stock_ledger');
+    const outcome = await writeOffStock(database.sql, stockWasteRequestSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
   });
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',

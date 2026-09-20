@@ -4,7 +4,7 @@ Esta matriz se actualiza al integrar cada PR. Una fila se considera completada s
 
 | Requisito                                                           | Entrega / rama                  | Evidencia requerida                                                                                                    | Estado    |
 | ------------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------- |
-| Contratos, actor autenticado, capacidades, decimales e idempotencia | `feature/pos-foundation`        | Pruebas de contrato, API y reintento con respuesta perdida                                                             | Pendiente |
+| Contratos, actor autenticado, capacidades, decimales e idempotencia | `feature/pos-foundation`        | [PR #15](https://github.com/BrizueIa/bj_burgers_web/pull/15), `Quality and Android bundle` y `Web end-to-end` en verde | Integrado |
 | PostgreSQL en CI, migraciones y concurrencia sin omisiones          | `chore/pos-integration-tests`   | [PR #14](https://github.com/BrizueIa/bj_burgers_web/pull/14), `Quality and Android bundle` y `Web end-to-end` en verde | Integrado |
 | Inventario inicial, reservas, conteos, ajustes y mermas             | `feature/stock-ledger`          | Migración desde datos existentes y pruebas de saldo no negativo                                                        | Pendiente |
 | Proveedores, presentaciones, compras y prorrateos                   | `feature/purchasing`            | Compra multipartida con descuento/gasto y reversión trazable                                                           | Pendiente |

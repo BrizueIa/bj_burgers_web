@@ -128,6 +128,7 @@ export const businessIngredientSchema = z.object({
   name: z.string(),
   unit: z.enum(['g', 'ml', 'pz']),
   stock: decimalSchema,
+  reserved: decimalSchema,
   minimum: decimalSchema,
   value_cents: decimalSchema,
   last_cost: decimalSchema.nullable(),
