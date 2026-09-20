@@ -14,6 +14,7 @@ import {
   supplierCreateSchema,
   presentationCreateSchema,
   purchaseCreateSchema,
+  recipeVersionCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -37,7 +38,7 @@ import {
   recordEntry,
   saveRecipe,
 } from './business-service.js';
-import { requireCapability } from './pos-foundation-service.js';
+import { getCapabilities, requireCapability } from './pos-foundation-service.js';
 import {
   countStock,
   releaseStockReservation,
@@ -46,6 +47,7 @@ import {
   writeOffStock,
 } from './stock-ledger-service.js';
 import { createPurchase } from './purchasing-service.js';
+import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -109,7 +111,36 @@ export async function registerOperator(
   });
   app.post('/api/v1/operator/business/recipes', async (request, reply) => {
     if (!(await protectOperator(request, reply, database, config))) return;
+    if (
+      (await getCapabilities(database.sql)).some(
+        (item) => item.key === 'recipe_versions' && item.enabled,
+      )
+    )
+      return reply
+        .code(409)
+        .send({ message: 'Actualiza la app para guardar recetas versionadas.' });
     return saveRecipe(database.sql, recipeSchema.parse(request.body));
+  });
+  app.post('/api/v1/operator/recipes/versions', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'recipe_versions');
+    const outcome = await createRecipeVersion(
+      database.sql,
+      recipeVersionCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/operator/recipes/versions', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    const { productId } = z
+      .object({ productId: z.string().min(1).optional() })
+      .parse(request.query);
+    reply.header('cache-control', 'no-store');
+    return recipeVersionState(database.sql, productId);
   });
   app.post('/api/v1/operator/business/entries', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);

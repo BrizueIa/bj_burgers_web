@@ -326,6 +326,11 @@ type Line = { id: string; name: string; quantity: number; totalCents?: number };
 export function BusinessEditor({ mode, productId }: { mode: BusinessMode; productId?: string }) {
   const range = useMemo(dayWindow, []);
   const { data, isLoading, error } = useBusiness(range);
+  const capabilities = useQuery({
+    queryKey: ['capabilities'],
+    queryFn: () => api.capabilities(),
+    staleTime: 60_000,
+  });
   const client = useQueryClient();
   const [description, setDescription] = useState('');
   const [unit, setUnit] = useState<'g' | 'ml' | 'pz'>('g');
@@ -342,6 +347,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const product = data?.products.find((item) => item.id === productId);
+  const recipeVersionsEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'recipe_versions' && capability.enabled,
+  );
   useEffect(() => {
     if (mode !== 'recipe' || !data || !product || lines.length) return;
     setTargetMargin(String(product.target_margin ?? 65));
@@ -424,6 +432,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         overheadCents: centsFromInput(overhead),
         priceCents: centsFromInput(price),
         lines: lines.map((line) => ({ ingredientId: line.id, quantity: line.quantity })),
+        idempotencyKey: createIdempotencyKey(),
       };
     }
     if (!description.trim()) {
@@ -513,8 +522,25 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         await api.addIngredient(
           input as { name: string; unit: 'g' | 'ml' | 'pz'; minimum: number },
         );
-      else if (mode === 'recipe') await api.saveRecipe(input as never);
-      else if (mode === 'count') await api.countStock(input as never);
+      else if (mode === 'recipe') {
+        if (recipeVersionsEnabled)
+          await api.createRecipeVersion({
+            idempotencyKey: input.idempotencyKey as string,
+            productId: input.productId as string,
+            targetMargin: input.targetMargin as number,
+            overheadCents: input.overheadCents as number,
+            components: (input.lines as Array<{ ingredientId: string; quantity: number }>).map(
+              (line) => ({
+                kind: 'ingredient' as const,
+                ingredientId: line.ingredientId,
+                quantity: line.quantity.toFixed(3),
+                removable: false,
+                extra: false,
+              }),
+            ),
+          });
+        else await api.saveRecipe(input as never);
+      } else if (mode === 'count') await api.countStock(input as never);
       else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
       router.back();
@@ -611,6 +637,12 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       ) : null}
       {mode === 'recipe' ? (
         <>
+          {recipeVersionsEnabled ? (
+            <Notice>
+              La receta se guardará como una nueva versión. El precio de lista no se cambia desde
+              esta operación.
+            </Notice>
+          ) : null}
           <Field
             label="Margen objetivo (%)"
             keyboardType="number-pad"
