@@ -14,7 +14,7 @@ import {
   Smartphone,
   Tags,
 } from 'lucide-react';
-import type { BusinessSettings, PromotionRule, StockLedgerState } from '@bj/contracts';
+import type { BusinessSettings, Order, PromotionRule, StockLedgerState } from '@bj/contracts';
 
 type Tab =
   | 'overview'
@@ -24,6 +24,7 @@ type Tab =
   | 'inventory'
   | 'recipes'
   | 'purchasing'
+  | 'orders'
   | 'roulette'
   | 'devices';
 type CategoryRow = {
@@ -105,6 +106,7 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'inventory', label: 'Inventario', icon: ClipboardList },
   { id: 'recipes', label: 'Recetas', icon: ChefHat },
   { id: 'purchasing', label: 'Compras', icon: Truck },
+  { id: 'orders', label: 'Comandas', icon: ClipboardList },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
   { id: 'devices', label: 'Dispositivos', icon: Smartphone },
 ];
@@ -620,6 +622,56 @@ function PurchasingView({ data }: { data: Purchasing | null }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function OrdersView({ orders }: { orders: Order[] | null }) {
+  if (!orders) return <p>Cargando comandas…</p>;
+  return (
+    <section className="admin-card">
+      <p className="eyebrow">Venta y preparación en un solo registro</p>
+      <h2>Comandas recientes</h2>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Cliente</th>
+              <th>Modalidad</th>
+              <th>Estado</th>
+              <th>Total</th>
+              <th>Partidas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.length ? (
+              orders.map((order) => (
+                <tr key={order.id}>
+                  <td>{formatDate(order.createdAt)}</td>
+                  <td>{order.customerName || 'Mostrador'}</td>
+                  <td>
+                    {order.fulfillment === 'counter'
+                      ? 'Mostrador'
+                      : order.fulfillment === 'pickup'
+                        ? 'Recoger'
+                        : 'Domicilio'}
+                  </td>
+                  <td>{order.status}</td>
+                  <td>{formatMoney(order.totalCents)}</td>
+                  <td>
+                    {order.items.map((item) => item.quantity + '× ' + item.productName).join(', ')}
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={6}>Aún no hay comandas.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1497,20 +1549,23 @@ export default function App() {
   const [inventoryLedger, setInventoryLedger] = useState<StockLedgerState | null>(null);
   const [purchasing, setPurchasing] = useState<Purchasing | null>(null);
   const [recipeVersions, setRecipeVersions] = useState<RecipeVersions | null>(null);
+  const [orders, setOrders] = useState<Order[] | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   async function load(showNotice = false) {
-    const [data, ledger, purchasingData, recipeVersionsData] = await Promise.all([
+    const [data, ledger, purchasingData, recipeVersionsData, ordersData] = await Promise.all([
       request<Dashboard>('/api/v1/admin/dashboard'),
       request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
       request<Purchasing>('/api/v1/admin/purchasing'),
       request<RecipeVersions>('/api/v1/admin/recipes/versions'),
+      request<{ orders: Order[] }>('/api/v1/admin/orders'),
     ]);
     setDashboard(data);
     setInventoryLedger(ledger);
     setPurchasing(purchasingData);
     setRecipeVersions(recipeVersionsData);
+    setOrders(ordersData.orders);
     if (showNotice) {
       setNotice('Cambios guardados. La web pública se actualizará automáticamente.');
       window.setTimeout(() => setNotice(''), 4000);
@@ -1702,6 +1757,7 @@ export default function App() {
           />
         )}
         {tab === 'purchasing' && <PurchasingView data={purchasing} />}
+        {tab === 'orders' && <OrdersView orders={orders} />}
         {tab === 'roulette' && (
           <Roulette
             prizes={dashboard.prizes}

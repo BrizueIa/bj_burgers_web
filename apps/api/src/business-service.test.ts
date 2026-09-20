@@ -21,6 +21,8 @@ import { createPurchase } from './purchasing-service.js';
 import { reversePurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+import { createUnifiedOrder, InMemoryOrderNotifier, updateOrderStatus } from './order-service.js';
+import { seedCatalog } from '@bj/contracts';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -102,7 +104,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -117,6 +119,95 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   });
   afterAll(async () => {
     await pg?.close();
+  });
+
+  it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
+    await purchase(1000, 10000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 100,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150.000',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    const sourceProduct = seedCatalog.products[0]!;
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...sourceProduct,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const key = randomUUID();
+    const input = {
+      idempotencyKey: key,
+      fulfillment: 'counter' as const,
+      customerName: '',
+      neighborhood: '',
+      streetAndNumber: '',
+      quotedTotalCents: 10000,
+      items: [
+        {
+          productId: 'burger',
+          quantity: 1,
+          removedIngredients: [],
+          modifierIds: [],
+          combo: false,
+          note: '',
+        },
+      ],
+    };
+    const notifier = new InMemoryOrderNotifier();
+    const created = await createUnifiedOrder(sql, catalog, input, device, notifier);
+    const retried = await createUnifiedOrder(sql, catalog, input, device, notifier);
+    expect(retried).toMatchObject({ order: { id: created.order.id }, reused: true });
+    await expect(
+      createUnifiedOrder(sql, catalog, { ...input, quotedTotalCents: 9999 }, device, notifier),
+    ).rejects.toThrow('clave');
+    let [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
+      select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
+      from stock_ingredients where id=${ingredient}`;
+    expect(balance).toEqual({ stock: '1000.000', reserved: '150.000', active: 1 });
+    await updateOrderStatus(sql, created.order.id, 'preparing', '', device, notifier, randomUUID());
+    await updateOrderStatus(sql, created.order.id, 'ready', '', device, notifier, randomUUID());
+    await updateOrderStatus(
+      sql,
+      created.order.id,
+      'cancelled',
+      'Cliente canceló',
+      device,
+      notifier,
+      randomUUID(),
+    );
+    [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
+      select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
+      from stock_ingredients where id=${ingredient}`;
+    expect(balance).toEqual({ stock: '850.000', reserved: '0.000', active: 0 });
+    const [allocation] = await sql<{ classification: string; cost_cents: string }[]>`
+      select classification,cost_cents::text from order_cost_allocations where order_id=${created.order.id}`;
+    expect(allocation).toEqual({ classification: 'waste', cost_cents: '1500.000000' });
   });
 
   it('no inventa costos para ingredientes sin compras', async () => {

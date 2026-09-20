@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
+import type { UnifiedOrderConfirm } from '@bj/contracts';
 import type { BusinessState } from '@bj/contracts';
 import { api } from './api';
 import { centsFromInput, money, numberValue, quantity, startOfToday } from './format';
@@ -108,6 +109,9 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
   const productionEnabled = capabilities.data?.some(
     (capability) => capability.key === 'production' && capability.enabled,
   );
+  const unifiedOrdersEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'unified_orders' && capability.enabled,
+  );
   const openEditor = (mode: BusinessMode, productId?: string) =>
     router.push({
       pathname: '/(app)/business/[mode]',
@@ -167,25 +171,29 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             </Text>
           </Card>
           <Notice>
-            Empieza con ingredientes, compras y recetas. Los avances actuales registran las ventas
-            del POS básico aparte de las comandas; su unificación forma parte de la siguiente etapa.
+            {unifiedOrdersEnabled
+              ? 'Las ventas nuevas se cotizan y reservan como comandas únicas. El cobro se integra desde Caja.'
+              : 'Empieza con ingredientes, compras y recetas. El POS unificado permanece deshabilitado hasta conciliar existencias.'}
           </Notice>
         </>
       ) : null}
       {section === 'pos' ? (
         <>
-          {!capabilities.data?.find((capability) => capability.key === 'unified_orders')
-            ?.enabled ? (
+          {!unifiedOrdersEnabled ? (
             <Notice kind="warning">
               El POS unificado aún no está habilitado por el servidor. Las operaciones confirmadas
               seguirán el circuito disponible hasta que se complete la conciliación.
             </Notice>
           ) : null}
           <Text style={shared.subtitle}>
-            Ventas de mostrador con precio de lista y consumo de receta. Las comandas actuales no
-            registran todavía el cobro.
+            {unifiedOrdersEnabled
+              ? 'Cotiza y crea una sola comanda para mostrador, recoger o domicilio. Preparación y entrega se controlan desde Comandas.'
+              : 'Ventas de mostrador con precio de lista y consumo de receta. Las comandas actuales no registran todavía el cobro.'}
           </Text>
-          <Button label="Cobrar venta" onPress={() => openEditor('sale')} />
+          <Button
+            label={unifiedOrdersEnabled ? 'Nueva comanda' : 'Cobrar venta'}
+            onPress={() => openEditor('sale')}
+          />
           <Button label="Ver comandas" secondary onPress={() => router.push('/(app)/orders')} />
           {data.products.map((product) => (
             <Card key={product.id}>
@@ -346,6 +354,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [unit, setUnit] = useState<'g' | 'ml' | 'pz'>('g');
   const [minimum, setMinimum] = useState('0');
   const [payment, setPayment] = useState<'cash' | 'card' | 'transfer'>('cash');
+  const [fulfillment, setFulfillment] = useState<'counter' | 'pickup' | 'delivery'>('counter');
+  const [neighborhood, setNeighborhood] = useState('');
+  const [streetAndNumber, setStreetAndNumber] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [lineQuantity, setLineQuantity] = useState('');
   const [lineTotal, setLineTotal] = useState('');
@@ -359,6 +370,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const product = data?.products.find((item) => item.id === productId);
   const recipeVersionsEnabled = capabilities.data?.some(
     (capability) => capability.key === 'recipe_versions' && capability.enabled,
+  );
+  const unifiedOrdersEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'unified_orders' && capability.enabled,
   );
   useEffect(() => {
     if (mode !== 'recipe' || !data || !product || lines.length) return;
@@ -463,7 +477,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         reason: description.trim(),
       };
     }
-    if (!description.trim()) {
+    if (!description.trim() && mode !== 'sale') {
       setMessage(
         mode === 'expense' ? 'Describe el gasto.' : 'Escribe el proveedor, cliente o motivo.',
       );
@@ -530,6 +544,22 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         sum + (data.products.find((item) => item.id === line.id)?.price_cents ?? 0) * line.quantity,
       0,
     );
+    if (unifiedOrdersEnabled)
+      return {
+        fulfillment,
+        customerName: description.trim(),
+        neighborhood: fulfillment === 'delivery' ? neighborhood.trim() : '',
+        streetAndNumber: fulfillment === 'delivery' ? streetAndNumber.trim() : '',
+        items: lines.map((line) => ({
+          productId: line.id,
+          quantity: line.quantity,
+          removedIngredients: [],
+          modifierIds: [],
+          combo: false,
+          note: '',
+        })),
+        idempotencyKey: createIdempotencyKey(),
+      };
     return {
       kind: 'sale',
       description: description.trim(),
@@ -571,7 +601,25 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       } else if (mode === 'production') {
         await api.createProductionBatch(input as never);
       } else if (mode === 'count') await api.countStock(input as never);
-      else await api.recordBusinessEntry(input);
+      else if (mode === 'sale' && unifiedOrdersEnabled) {
+        if (!('quotedTotalCents' in input)) {
+          const quote = await api.quoteUnifiedOrder(
+            input as Omit<UnifiedOrderConfirm, 'idempotencyKey' | 'quotedTotalCents'>,
+          );
+          setPending({ ...input, quotedTotalCents: quote.totalCents });
+          setMessage(
+            'Cotización confirmada por ' +
+              money(quote.totalCents) +
+              '. Presiona confirmar para crear la comanda.',
+          );
+          return;
+        }
+        const order = await api.confirmUnifiedOrder(input as UnifiedOrderConfirm);
+        await client.invalidateQueries({ queryKey: ['orders'] });
+        await client.invalidateQueries({ queryKey: ['business'] });
+        router.replace({ pathname: '/(app)/orders/[id]', params: { id: order.id } });
+        return;
+      } else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
       router.back();
     } catch (cause) {
@@ -599,7 +647,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       <SectionTitle title={heading} />
       <Text style={shared.subtitle}>
         {mode === 'sale'
-          ? 'El servidor confirma el precio y descuenta el inventario. Una respuesta incierta conserva esta misma operación para reintentarla.'
+          ? unifiedOrdersEnabled
+            ? 'Primero cotiza en el servidor y confirma la misma solicitud. La comanda reserva existencias; el cobro se registra en Caja.'
+            : 'El servidor confirma el precio y descuenta el inventario. Una respuesta incierta conserva esta misma operación para reintentarla.'
           : mode === 'recipe'
             ? 'El costo y precio sugerido se actualizarán usando las compras registradas.'
             : mode === 'production'
@@ -646,10 +696,13 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                       : 'Motivo de la merma'
           }
           value={description}
-          onChangeText={setDescription}
+          onChangeText={(value) => {
+            setDescription(value);
+            if (mode === 'sale') setPending(undefined);
+          }}
         />
       ) : null}
-      {mode === 'sale' ? (
+      {mode === 'sale' && !unifiedOrdersEnabled ? (
         <>
           <Text style={shared.label}>Forma de pago</Text>
           <View style={styles.row}>
@@ -668,6 +721,50 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
               />
             ))}
           </View>
+        </>
+      ) : null}
+      {mode === 'sale' && unifiedOrdersEnabled ? (
+        <>
+          <Text style={shared.label}>Modalidad</Text>
+          <View style={styles.row}>
+            {(
+              [
+                ['counter', 'Mostrador'],
+                ['pickup', 'Recoger'],
+                ['delivery', 'Domicilio'],
+              ] as const
+            ).map(([value, label]) => (
+              <Pill
+                key={value}
+                label={label}
+                selected={fulfillment === value}
+                onPress={() => {
+                  setFulfillment(value);
+                  setPending(undefined);
+                }}
+              />
+            ))}
+          </View>
+          {fulfillment === 'delivery' ? (
+            <>
+              <Field
+                label="Colonia"
+                value={neighborhood}
+                onChangeText={(value) => {
+                  setNeighborhood(value);
+                  setPending(undefined);
+                }}
+              />
+              <Field
+                label="Dirección"
+                value={streetAndNumber}
+                onChangeText={(value) => {
+                  setStreetAndNumber(value);
+                  setPending(undefined);
+                }}
+              />
+            </>
+          ) : null}
         </>
       ) : null}
       {mode === 'recipe' ? (
@@ -762,7 +859,14 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
               onChangeText={setLineTotal}
             />
           ) : null}
-          {requiresLines ? <Button label="Agregar línea" secondary onPress={addLine} /> : null}
+          {requiresLines ? (
+            <Button
+              label="Agregar línea"
+              secondary
+              disabled={mode === 'sale' && Boolean(pending)}
+              onPress={addLine}
+            />
+          ) : null}
           {lines.map((line) => (
             <View key={line.id} style={styles.line}>
               <Text style={shared.text}>
@@ -775,7 +879,11 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
               <Button
                 label="Quitar"
                 secondary
-                onPress={() => setLines((current) => current.filter((item) => item.id !== line.id))}
+                disabled={mode === 'sale' && Boolean(pending)}
+                onPress={() => {
+                  setLines((current) => current.filter((item) => item.id !== line.id));
+                  setPending(undefined);
+                }}
               />
             </View>
           ))}
@@ -795,7 +903,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           )}
         />
       ) : null}
-      {message ? <Notice kind="error">{message}</Notice> : null}
+      {message ? (
+        <Notice kind={message.startsWith('Cotización') ? 'info' : 'error'}>{message}</Notice>
+      ) : null}
       {pending && !busy ? (
         <Notice kind="warning">
           La respuesta no se confirmó. Reintenta esta misma operación para no duplicarla.
@@ -805,11 +915,15 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         label={
           busy
             ? 'Guardando…'
-            : pending
-              ? 'Reintentar operación'
-              : mode === 'sale'
-                ? 'Confirmar cobro y descontar inventario'
-                : 'Guardar'
+            : mode === 'sale' && unifiedOrdersEnabled && pending && 'quotedTotalCents' in pending
+              ? 'Confirmar comanda cotizada'
+              : pending
+                ? 'Reintentar operación'
+                : mode === 'sale'
+                  ? unifiedOrdersEnabled
+                    ? 'Cotizar comanda'
+                    : 'Confirmar cobro y descontar inventario'
+                  : 'Guardar'
         }
         disabled={busy}
         onPress={() => void save()}

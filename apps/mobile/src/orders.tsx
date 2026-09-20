@@ -213,9 +213,15 @@ export function OrderDetailPanel({
   } = useQuery({ queryKey: ['order', orderId], queryFn: () => api.order(orderId) });
   const [message, setMessage] = useState<string | undefined>(undefined);
   const spinKey = useRef<string | undefined>(undefined);
+  const statusKey = useRef<{ status: OrderStatus; key: string } | undefined>(undefined);
   const change = useMutation({
-    mutationFn: (status: OrderStatus) => api.updateOrderStatus(orderId, status),
+    mutationFn: (status: OrderStatus) => {
+      if (statusKey.current?.status !== status)
+        statusKey.current = { status, key: createIdempotencyKey() };
+      return api.updateOrderStatus(orderId, status, '', statusKey.current.key);
+    },
     onSuccess: async () => {
+      statusKey.current = undefined;
       await queryClient.invalidateQueries({ queryKey: ['orders'] });
       await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
     },

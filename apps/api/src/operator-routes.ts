@@ -25,6 +25,7 @@ import {
   type InMemoryOrderNotifier,
   OrderError,
   createOrder,
+  createUnifiedOrder,
   getOrder,
   issueOrderSpinCode,
   listOrders,
@@ -194,22 +195,14 @@ export async function registerOperator(
       return reply.code(400).send({ message: 'Domicilio requiere colonia y dirección.' });
     const catalog = await loadCatalog(database);
     try {
-      const order = await createOrder(
+      const outcome = await createUnifiedOrder(
         database.sql,
         catalog,
-        {
-          ...input,
-          customerName:
-            input.customerName || (input.fulfillment === 'counter' ? 'Mostrador' : 'Cliente'),
-          rawMessage: '',
-          references: '',
-          deliveryNotes: '',
-        },
+        input,
         context.deviceId,
         notifier,
-        { fulfillment: input.fulfillment, reserveInventory: true },
       );
-      return reply.code(201).send({ order });
+      return reply.code(outcome.statusCode).send({ order: outcome.order, reused: outcome.reused });
     } catch (error) {
       if (error instanceof OrderError)
         return reply.code(error.statusCode).send({ message: error.message });
@@ -459,6 +452,7 @@ export async function registerOperator(
           input.note,
           context.deviceId,
           notifier,
+          input.idempotencyKey,
         ),
       };
     } catch (error) {

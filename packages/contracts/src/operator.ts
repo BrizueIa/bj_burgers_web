@@ -42,6 +42,7 @@ export const orderCreateRequestSchema = z.object({
 export const orderStatusUpdateSchema = z.object({
   status: orderStatusSchema,
   note: z.string().trim().max(500).default(''),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export const spinCodeIssueRequestSchema = z.object({ idempotencyKey: z.uuid() });
@@ -87,6 +88,7 @@ export const orderEventSchema = z.object({
 export const orderSchema = z.object({
   id: z.uuid(),
   source: z.string(),
+  fulfillment: z.enum(['counter', 'pickup', 'delivery']),
   status: orderStatusSchema,
   customerName: z.string(),
   neighborhood: z.string(),
@@ -100,6 +102,10 @@ export const orderSchema = z.object({
   totalCents: z.number().int().nonnegative(),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
+  quotedAt: z.string().datetime({ offset: true }).nullable(),
+  preparingAt: z.string().datetime({ offset: true }).nullable(),
+  deliveredAt: z.string().datetime({ offset: true }).nullable(),
+  cancelledAt: z.string().datetime({ offset: true }).nullable(),
   spinCodeIssued: z.boolean(),
   items: z.array(orderItemSchema),
   events: z.array(orderEventSchema),

@@ -23,6 +23,7 @@ import { stockLedgerState } from './stock-ledger-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { requireCapability } from './pos-foundation-service.js';
 import { createProductionBatch } from './production-service.js';
+import { listOrders } from './order-service.js';
 
 interface AdminContext {
   userId: string;
@@ -157,6 +158,13 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       redemptions,
       devices,
     };
+  });
+
+  app.get('/api/v1/admin/orders', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    reply.header('cache-control', 'no-store');
+    return { orders: await listOrders(database.sql) };
   });
 
   app.get('/api/v1/admin/inventory/ledger', async (request, reply) => {

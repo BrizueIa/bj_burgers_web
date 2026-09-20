@@ -207,11 +207,11 @@ export class BjApiClient {
     }).then((result) => result.order);
   }
 
-  updateOrderStatus(id: string, status: OrderStatus, note = '') {
+  updateOrderStatus(id: string, status: OrderStatus, note = '', idempotencyKey?: string) {
     return this.request(`/operator/orders/${id}/status`, orderResponseSchema, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status, note }),
+      body: JSON.stringify({ status, note, ...(idempotencyKey ? { idempotencyKey } : {}) }),
     }).then((result) => result.order);
   }
 
@@ -257,8 +257,14 @@ export class BjApiClient {
     return this.post('/operator/production/batches', productionBatchResponseSchema, input);
   }
 
-  quoteUnifiedOrder(input: Omit<UnifiedOrderConfirm, 'idempotencyKey'>) {
+  quoteUnifiedOrder(input: Omit<UnifiedOrderConfirm, 'idempotencyKey' | 'quotedTotalCents'>) {
     return this.post('/operator/unified-orders/quote', unifiedOrderQuoteResponseSchema, input);
+  }
+
+  confirmUnifiedOrder(input: UnifiedOrderConfirm) {
+    return this.post('/operator/unified-orders', orderResponseSchema, input).then(
+      (result) => result.order,
+    );
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {

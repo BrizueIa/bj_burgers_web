@@ -17,6 +17,7 @@ describe('BjApiClient', () => {
         order: {
           id: '4efbd774-a99b-43a0-a7c7-34d43c1cd800',
           source: 'manual',
+          fulfillment: 'delivery',
           status: 'new',
           customerName: 'Ana',
           neighborhood: '',
@@ -30,6 +31,10 @@ describe('BjApiClient', () => {
           totalCents: 100,
           createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z',
+          quotedAt: null,
+          preparingAt: null,
+          deliveredAt: null,
+          cancelledAt: null,
           spinCodeIssued: false,
           items: [],
           events: [],

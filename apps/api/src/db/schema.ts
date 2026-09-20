@@ -152,6 +152,7 @@ export const mobileDevices = pgTable('mobile_devices', {
 export const orders = pgTable('orders', {
   id: uuid('id').primaryKey().defaultRandom(),
   source: text('source').notNull().default('manual_whatsapp'),
+  fulfillment: text('fulfillment').notNull().default('delivery'),
   status: text('status').notNull().default('new'),
   customerName: text('customer_name').notNull(),
   neighborhood: text('neighborhood').notNull().default(''),
@@ -165,6 +166,10 @@ export const orders = pgTable('orders', {
   totalCents: integer('total_cents').notNull(),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),
   createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  quotedAt: timestamp('quoted_at', { withTimezone: true }),
+  preparingAt: timestamp('preparing_at', { withTimezone: true }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -185,6 +190,10 @@ export const orderItems = pgTable('order_items', {
   combo: jsonb('combo').$type<Record<string, unknown> | null>(),
   note: text('note').notNull().default(''),
   lineTotalCents: integer('line_total_cents').notNull(),
+  compositionSnapshot: jsonb('composition_snapshot')
+    .$type<Record<string, unknown>[]>()
+    .notNull()
+    .default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -260,6 +269,36 @@ export const stockReservations = pgTable('stock_reservations', {
   resolvedAt: timestamp('resolved_at', { withTimezone: true }),
 });
 
+export const orderStockReservations = pgTable(
+  'order_stock_reservations',
+  {
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    reservationId: uuid('reservation_id')
+      .notNull()
+      .references(() => stockReservations.id),
+    componentKind: text('component_kind').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.orderId, table.reservationId] })],
+);
+
+export const orderCostAllocations = pgTable('order_cost_allocations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  reservationId: uuid('reservation_id')
+    .notNull()
+    .references(() => stockReservations.id),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  costCents: numeric('cost_cents', { precision: 20, scale: 6 }).notNull(),
+  classification: text('classification').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  classifiedAt: timestamp('classified_at', { withTimezone: true }),
+});
 export const stockLedgerMovements = pgTable('stock_ledger_movements', {
   id: uuid('id').primaryKey().defaultRandom(),
   ingredientId: uuid('ingredient_id')
