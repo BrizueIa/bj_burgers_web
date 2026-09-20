@@ -31,6 +31,7 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0007_purchasing.sql',
       '0008_recipe_versions.sql',
       '0009_production.sql',
+      '0010_unified_orders.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into prizes (id, label, emoji, weight, active, inventory, target_segments)

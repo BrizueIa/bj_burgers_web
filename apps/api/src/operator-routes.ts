@@ -16,6 +16,8 @@ import {
   purchaseCreateSchema,
   productionBatchCreateSchema,
   recipeVersionCreateSchema,
+  unifiedOrderQuoteSchema,
+  unifiedOrderConfirmSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -50,6 +52,7 @@ import {
 import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+import { calculateCart } from '@bj/contracts';
 
 interface OperatorContext {
   deviceId: string;
@@ -154,6 +157,64 @@ export async function registerOperator(
       { kind: 'device', deviceId: context.deviceId, origin: 'android' },
     );
     return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/unified-orders/quote', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    const input = unifiedOrderQuoteSchema.parse(request.body);
+    if (input.fulfillment === 'delivery' && (!input.neighborhood || !input.streetAndNumber))
+      return reply.code(400).send({ message: 'Domicilio requiere colonia y dirección.' });
+    const catalog = await loadCatalog(database);
+    const totals = calculateCart(
+      catalog,
+      input.items.map((item, index) => ({
+        id: `quote-${index}`,
+        productId: item.productId,
+        quantity: item.quantity,
+        removedIngredients: item.removedIngredients,
+        modifierIds: item.modifierIds,
+        combo: item.combo,
+        ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+        note: item.note,
+      })),
+    );
+    return {
+      fulfillment: input.fulfillment,
+      subtotalCents: totals.totalCents,
+      deliveryCents: 0,
+      totalCents: totals.totalCents,
+      promotion: totals.promotion ?? null,
+    };
+  });
+  app.post('/api/v1/operator/unified-orders', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    const input = unifiedOrderConfirmSchema.parse(request.body);
+    if (input.fulfillment === 'delivery' && (!input.neighborhood || !input.streetAndNumber))
+      return reply.code(400).send({ message: 'Domicilio requiere colonia y dirección.' });
+    const catalog = await loadCatalog(database);
+    try {
+      const order = await createOrder(
+        database.sql,
+        catalog,
+        {
+          ...input,
+          customerName:
+            input.customerName || (input.fulfillment === 'counter' ? 'Mostrador' : 'Cliente'),
+          rawMessage: '',
+          references: '',
+          deliveryNotes: '',
+        },
+        context.deviceId,
+        notifier,
+        { fulfillment: input.fulfillment, reserveInventory: true },
+      );
+      return reply.code(201).send({ order });
+    } catch (error) {
+      if (error instanceof OrderError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
+    }
   });
   app.post('/api/v1/operator/business/entries', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);

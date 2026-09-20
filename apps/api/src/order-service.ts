@@ -279,6 +279,7 @@ export async function createOrder(
   input: OrderCreateRequest,
   deviceId: string,
   notifier: OrderNotifier,
+  options?: { fulfillment?: 'counter' | 'pickup' | 'delivery'; reserveInventory?: boolean },
 ) {
   const order = await sql.begin(async (tx) => {
     const { productMap, modifierMap } = await validateItems(tx as unknown as Sql, input.items);
@@ -298,10 +299,10 @@ export async function createOrder(
     const inserted = await tx<{ id: string }[]>`
       insert into orders (
         source, customer_name, neighborhood, street_and_number, delivery_references, delivery_notes, raw_message,
-        promotion_snapshot, subtotal_cents, delivery_cents, total_cents, idempotency_key, created_by_device_id
+        promotion_snapshot, subtotal_cents, delivery_cents, total_cents, idempotency_key, created_by_device_id, fulfillment
       ) values (
         'manual_whatsapp', ${input.customerName}, ${input.neighborhood}, ${input.streetAndNumber}, ${input.references}, ${input.deliveryNotes}, ${input.rawMessage},
-        ${totals.promotion ? JSON.stringify(totals.promotion) : null}, ${totals.totalCents}, 0, ${totals.totalCents}, ${input.idempotencyKey}, ${deviceId}
+        ${totals.promotion ? JSON.stringify(totals.promotion) : null}, ${totals.totalCents}, 0, ${totals.totalCents}, ${input.idempotencyKey}, ${deviceId}, ${options?.fulfillment ?? 'delivery'}
       ) on conflict (idempotency_key) do nothing returning id`;
     if (!inserted[0]) {
       const previous = await tx<{ id: string }[]>`
@@ -328,6 +329,24 @@ export async function createOrder(
       await tx`
         insert into order_items (order_id, product_id, product_name, unit_price_cents, quantity, removed_ingredients, modifiers, combo, note, line_total_cents)
         values (${orderId}, ${product.id}, ${product.name}, ${product.price_cents}, ${item.quantity}, ${JSON.stringify(item.removedIngredients)}, ${JSON.stringify(selectedModifiers.map((modifier) => ({ id: modifier.id, name: modifier.name, priceCents: modifier.price_cents })))}, ${combo ? JSON.stringify(combo) : null}, ${item.note}, ${lineTotal})`;
+    }
+    if (options?.reserveInventory) {
+      const needs = await tx<{ ingredient_id: string; quantity: string }[]>`
+        select l.ingredient_id, sum(l.quantity * i.quantity)::text as quantity
+        from recipe_lines l join jsonb_to_recordset(${JSON.stringify(input.items)}::jsonb) as i(productId text, quantity numeric)
+          on i.productId=l.product_id group by l.ingredient_id order by l.ingredient_id`;
+      if (!needs.length) throw new OrderError(409, 'Falta la receta para reservar esta comanda.');
+      for (const need of needs) {
+        const [reservation] = await tx<{ id: string }[]>`
+          with updated as (
+            update stock_ingredients set reserved=reserved+${need.quantity}::numeric
+            where id=${need.ingredient_id} and stock-reserved>=${need.quantity}::numeric returning id
+          ) insert into stock_reservations(ingredient_id,quantity,status,reference_type,reference_id,reason,created_by_device_id)
+          select id,${need.quantity}::numeric,'active','unified_order',${orderId},'Reserva de comanda unificada',${deviceId} from updated returning id`;
+        if (!reservation)
+          throw new OrderError(409, 'No hay existencia disponible para confirmar la comanda.');
+        await tx`insert into order_stock_reservations(order_id,reservation_id,component_kind) values(${orderId},${reservation.id},'ingredient')`;
+      }
     }
     await tx`insert into order_events (order_id, event_type, status, note, device_id) values (${orderId}, 'created', 'new', 'Comanda creada desde WhatsApp.', ${deviceId})`;
     return getOrder(tx as unknown as Sql, orderId);
@@ -362,7 +381,26 @@ export async function updateOrderStatus(
     if (!current) throw new OrderError(404, 'La comanda no existe.');
     if (!allowedTransitions[current.status].includes(nextStatus))
       throw new OrderError(409, 'Ese cambio de estado no está permitido.');
-    await tx`update orders set status=${nextStatus}, updated_at=now() where id=${orderId}`;
+    if (nextStatus === 'cancelled' && current.status === 'new') {
+      const reservations = await tx<
+        { reservation_id: string; ingredient_id: string; quantity: string }[]
+      >`
+        select r.id as reservation_id,r.ingredient_id,r.quantity::text from order_stock_reservations x
+        join stock_reservations r on r.id=x.reservation_id where x.order_id=${orderId} and r.status='active'
+        order by r.ingredient_id for update`;
+      for (const reservation of reservations) {
+        const released =
+          await tx`update stock_ingredients set reserved=reserved-${reservation.quantity}::numeric
+          where id=${reservation.ingredient_id} and reserved>=${reservation.quantity}::numeric returning id`;
+        if (!released[0]) throw new OrderError(409, 'La reserva ya no coincide con el inventario.');
+        await tx`update stock_reservations set status='released',resolved_at=now(),reason=${note || 'Cancelación de comanda'} where id=${reservation.reservation_id}`;
+      }
+    }
+    await tx`update orders set status=${nextStatus}, updated_at=now(),
+      preparing_at=case when ${nextStatus}='preparing' then now() else preparing_at end,
+      delivered_at=case when ${nextStatus}='delivered' then now() else delivered_at end,
+      cancelled_at=case when ${nextStatus}='cancelled' then now() else cancelled_at end
+      where id=${orderId}`;
     await tx`insert into order_events (order_id, event_type, status, note, device_id) values (${orderId}, 'status_changed', ${nextStatus}, ${note}, ${deviceId})`;
     return getOrder(tx as unknown as Sql, orderId);
   });

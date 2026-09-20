@@ -28,6 +28,8 @@ import {
   type RecipeVersionCreate,
   type ProductionBatchCreate,
   type RecipeVersionState,
+  unifiedOrderQuoteResponseSchema,
+  type UnifiedOrderConfirm,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -253,6 +255,10 @@ export class BjApiClient {
 
   createProductionBatch(input: ProductionBatchCreate) {
     return this.post('/operator/production/batches', productionBatchResponseSchema, input);
+  }
+
+  quoteUnifiedOrder(input: Omit<UnifiedOrderConfirm, 'idempotencyKey'>) {
+    return this.post('/operator/unified-orders/quote', unifiedOrderQuoteResponseSchema, input);
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {

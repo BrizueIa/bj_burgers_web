@@ -87,6 +87,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0007_purchasing.sql',
       '0008_recipe_versions.sql',
       '0009_production.sql',
+      '0010_unified_orders.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
