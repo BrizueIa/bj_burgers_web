@@ -3,6 +3,7 @@ import {
   BadgeDollarSign,
   Clock3,
   ClipboardList,
+  Truck,
   Gift,
   LayoutDashboard,
   LoaderCircle,
@@ -14,7 +15,15 @@ import {
 } from 'lucide-react';
 import type { BusinessSettings, PromotionRule, StockLedgerState } from '@bj/contracts';
 
-type Tab = 'overview' | 'menu' | 'promotions' | 'business' | 'inventory' | 'roulette' | 'devices';
+type Tab =
+  | 'overview'
+  | 'menu'
+  | 'promotions'
+  | 'business'
+  | 'inventory'
+  | 'purchasing'
+  | 'roulette'
+  | 'devices';
 type CategoryRow = {
   id: string;
   name: string;
@@ -92,6 +101,7 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'promotions', label: 'Promociones', icon: Tags },
   { id: 'business', label: 'Negocio', icon: Clock3 },
   { id: 'inventory', label: 'Inventario', icon: ClipboardList },
+  { id: 'purchasing', label: 'Compras', icon: Truck },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
   { id: 'devices', label: 'Dispositivos', icon: Smartphone },
 ];
@@ -199,6 +209,100 @@ function InventoryLedger({ data }: { data: StockLedgerState | null }) {
               ) : (
                 <tr>
                   <td colSpan={5}>El saldo inicial aparecerá al migrar existencias.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type Purchasing = {
+  suppliers: Array<{ id: string; name: string; active: boolean }>;
+  presentations: Array<{
+    id: string;
+    name: string;
+    ingredient_name: string;
+    supplier_name: string | null;
+    base_quantity: string;
+    active: boolean;
+  }>;
+  purchases: Array<{
+    id: string;
+    supplier_name: string;
+    reference: string;
+    status: string;
+    total_cents: number;
+    payment_method: string;
+    funds_origin: string;
+    created_at: string;
+  }>;
+};
+function PurchasingView({ data }: { data: Purchasing | null }) {
+  if (!data) return <p>Cargando compras…</p>;
+  return (
+    <div className="settings-grid">
+      <section className="admin-card">
+        <p className="eyebrow">Proveedores y presentaciones</p>
+        <h2>Equivalencias guardadas</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Proveedor</th>
+                <th>Presentación</th>
+                <th>Ingrediente</th>
+                <th>Equivale a</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.presentations.length ? (
+                data.presentations.map((p) => (
+                  <tr key={p.id}>
+                    <td>{p.supplier_name ?? '—'}</td>
+                    <td>{p.name}</td>
+                    <td>{p.ingredient_name}</td>
+                    <td>{p.base_quantity}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4}>Aún no hay presentaciones.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="admin-card">
+        <h2>Compras recientes</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Proveedor</th>
+                <th>Folio</th>
+                <th>Total</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.purchases.length ? (
+                data.purchases.map((p) => (
+                  <tr key={p.id}>
+                    <td>{formatDate(p.created_at)}</td>
+                    <td>{p.supplier_name}</td>
+                    <td>{p.reference || '—'}</td>
+                    <td>{formatMoney(p.total_cents)}</td>
+                    <td>{p.status}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5}>No hay compras registradas en el circuito nuevo.</td>
                 </tr>
               )}
             </tbody>
@@ -1081,16 +1185,19 @@ export default function App() {
   const [csrf, setCsrf] = useState('');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [inventoryLedger, setInventoryLedger] = useState<StockLedgerState | null>(null);
+  const [purchasing, setPurchasing] = useState<Purchasing | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   async function load(showNotice = false) {
-    const [data, ledger] = await Promise.all([
+    const [data, ledger, purchasingData] = await Promise.all([
       request<Dashboard>('/api/v1/admin/dashboard'),
       request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
+      request<Purchasing>('/api/v1/admin/purchasing'),
     ]);
     setDashboard(data);
     setInventoryLedger(ledger);
+    setPurchasing(purchasingData);
     if (showNotice) {
       setNotice('Cambios guardados. La web pública se actualizará automáticamente.');
       window.setTimeout(() => setNotice(''), 4000);
@@ -1271,6 +1378,7 @@ export default function App() {
           <BusinessEditor value={dashboard.business.data} csrf={csrf} onSaved={() => load(true)} />
         )}
         {tab === 'inventory' && <InventoryLedger data={inventoryLedger} />}
+        {tab === 'purchasing' && <PurchasingView data={purchasing} />}
         {tab === 'roulette' && (
           <Roulette
             prizes={dashboard.prizes}
