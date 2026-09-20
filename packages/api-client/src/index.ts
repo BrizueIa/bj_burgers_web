@@ -35,6 +35,8 @@ import {
   type CashSessionClose,
   type CashSessionOpen,
   type CashSessionState,
+  type OrderPaymentCreate,
+  type OrderRefundCreate,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -218,6 +220,31 @@ export class BjApiClient {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status, note, ...(idempotencyKey ? { idempotencyKey } : {}) }),
     }).then((result) => result.order);
+  }
+
+  collectOrderPayment(id: string, input: OrderPaymentCreate) {
+    return this.post(
+      '/operator/orders/' + id + '/payments',
+      z.object({
+        orderId: z.string().uuid(),
+        appliedCents: z.number().int(),
+        changeCents: z.number().int(),
+        balanceCents: z.number().int(),
+      }),
+      input,
+    );
+  }
+
+  refundOrderPayment(id: string, input: OrderRefundCreate) {
+    return this.post(
+      '/operator/orders/' + id + '/refunds',
+      z.object({
+        orderId: z.string().uuid(),
+        refundedCents: z.number().int(),
+        method: z.enum(['cash', 'card', 'transfer']),
+      }),
+      input,
+    );
   }
 
   issueSpinCode(id: string, idempotencyKey = createIdempotencyKey()) {

@@ -6,7 +6,7 @@ import { Share, ScrollView, StyleSheet, Text, useWindowDimensions, View } from '
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type { Catalog, Order, OrderDraft, OrderStatus } from '@bj/contracts';
 import { api } from './api';
-import { money, statusLabel } from './format';
+import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
@@ -212,6 +212,9 @@ export function OrderDetailPanel({
     refetch,
   } = useQuery({ queryKey: ['order', orderId], queryFn: () => api.order(orderId) });
   const [message, setMessage] = useState<string | undefined>(undefined);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
+  const [received, setReceived] = useState('');
+  const paymentKey = useRef<string | undefined>(undefined);
   const spinKey = useRef<string | undefined>(undefined);
   const statusKey = useRef<{ status: OrderStatus; key: string } | undefined>(undefined);
   const change = useMutation({
@@ -228,6 +231,30 @@ export function OrderDetailPanel({
     onError: (cause) =>
       setMessage(cause instanceof BjApiError ? cause.message : 'No se pudo cambiar el estado.'),
   });
+  const collectPayment = async () => {
+    setMessage(undefined);
+    paymentKey.current ??= createIdempotencyKey();
+    const cents = centsFromInput(received);
+    try {
+      const result = await api.collectOrderPayment(orderId, {
+        idempotencyKey: paymentKey.current,
+        payments: [
+          {
+            method: paymentMethod,
+            receivedCents: cents,
+            appliedCents: Math.min(cents, order?.balanceCents ?? 0),
+          },
+        ],
+      });
+      paymentKey.current = undefined;
+      setReceived('');
+      setMessage('Cobro confirmado. Saldo pendiente: ' + money(result.balanceCents));
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+    } catch (cause) {
+      setMessage(cause instanceof BjApiError ? cause.message : 'No se pudo confirmar el cobro.');
+    }
+  };
   const issueSpin = async () => {
     setMessage(undefined);
     spinKey.current ??= createIdempotencyKey();
@@ -272,6 +299,35 @@ export function OrderDetailPanel({
         {order.references ? `\nReferencias: ${order.references}` : ''}
         {order.deliveryNotes ? `\nIndicaciones: ${order.deliveryNotes}` : ''}
       </Text>
+      <Card>
+        <Text style={shared.label}>Cobro</Text>
+        <Text style={shared.text}>
+          Cobrado {money(order.paidCents)} · saldo {money(order.balanceCents)}
+        </Text>
+        {order.balanceCents > 0 ? (
+          <>
+            <View style={styles.paymentRow}>
+              {(['cash', 'card', 'transfer'] as const).map((method) => (
+                <Pill
+                  key={method}
+                  label={{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[method]}
+                  selected={paymentMethod === method}
+                  onPress={() => setPaymentMethod(method)}
+                />
+              ))}
+            </View>
+            <Field
+              label="Recibido (MXN)"
+              keyboardType="decimal-pad"
+              value={received}
+              onChangeText={setReceived}
+            />
+            <Button label="Registrar cobro" secondary onPress={() => void collectPayment()} />
+          </>
+        ) : (
+          <Text style={shared.subtitle}>Pago completo confirmado.</Text>
+        )}
+      </Card>
       <Card>
         {order.items.map((item) => (
           <View key={item.id} style={styles.item}>
@@ -672,5 +728,6 @@ const styles = StyleSheet.create({
   total: { color: colors.gold, fontSize: 30, fontWeight: '800' },
   item: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 4 },
   event: { paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
+  paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
 });

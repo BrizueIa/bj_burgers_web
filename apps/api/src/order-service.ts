@@ -172,6 +172,12 @@ function mapOrder(
     subtotalCents: row.subtotal_cents,
     deliveryCents: row.delivery_cents,
     totalCents: row.total_cents,
+    paidCents: row.paid_cents,
+    refundedCents: row.refunded_cents,
+    balanceCents: Math.max(
+      0,
+      Number(row.total_cents) - Number(row.paid_cents) + Number(row.refunded_cents),
+    ),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
     quotedAt: asIso(row.quoted_at),
@@ -204,7 +210,7 @@ function mapOrder(
 
 export async function getOrder(sql: Sql, id: string) {
   const rows = await sql<Record<string, unknown>[]>`
-    select o.*, sc.id as spin_code_id from orders o left join spin_codes sc on sc.order_id=o.id where o.id=${id} limit 1`;
+    select o.*, sc.id as spin_code_id, coalesce((select sum(applied_cents) from order_payments where order_id=o.id),0)::int as paid_cents, coalesce((select sum(amount_cents) from order_refunds where order_id=o.id),0)::int as refunded_cents from orders o left join spin_codes sc on sc.order_id=o.id where o.id=${id} limit 1`;
   const row = rows[0];
   if (!row) return null;
   const [items, events] = await Promise.all([
