@@ -106,3 +106,70 @@ export async function createPurchase(sql: Sql, input: PurchaseCreate, actor: Aut
     },
   );
 }
+export async function reversePurchase(
+  sql: Sql,
+  purchaseId: string,
+  input: { idempotencyKey: string; reason: string },
+  actor: AuthenticatedActor,
+) {
+  return runIdempotent(
+    sql,
+    {
+      idempotencyKey: input.idempotencyKey,
+      operation: 'purchase.reverse',
+      request: { purchaseId, ...input },
+      actor,
+    },
+    async (tx) => {
+      const docs = await tx<
+        { id: string; status: string; created_at: string | Date }[]
+      >`select id,status,created_at from purchase_documents where id=${purchaseId} for update`;
+      const doc = docs[0];
+      if (!doc) throw new PosFoundationError(404, 'La compra no existe.');
+      if (doc.status !== 'confirmed')
+        throw new PosFoundationError(409, 'La compra ya fue revertida.');
+      const lines = await tx<
+        { ingredient_id: string; applied_base_quantity: string; inventory_value_cents: number }[]
+      >`select ingredient_id,applied_base_quantity::text,inventory_value_cents from purchase_lines where purchase_id=${purchaseId} order by id`;
+      for (const line of lines) {
+        const later =
+          await tx`select id from stock_ledger_movements where ingredient_id=${line.ingredient_id} and created_at>${doc.created_at} limit 1`;
+        if (later[0])
+          throw new PosFoundationError(
+            409,
+            'No se puede revertir: existen consumos o movimientos posteriores.',
+          );
+        const rows = await tx<
+          { stock: string; value_cents: string }[]
+        >`update stock_ingredients set stock=stock-${line.applied_base_quantity},value_cents=value_cents-${line.inventory_value_cents} where id=${line.ingredient_id} and stock-reserved>=${line.applied_base_quantity} returning stock::text,value_cents::text`;
+        if (!rows[0])
+          throw new PosFoundationError(
+            409,
+            'No se puede revertir: la existencia disponible ya no alcanza.',
+          );
+        await appendMovement(tx as unknown as Sql, {
+          ingredientId: line.ingredient_id,
+          type: 'adjustment',
+          quantityDelta: `-${line.applied_base_quantity}`,
+          valueDeltaCents: `-${line.inventory_value_cents}`,
+          stockAfter: rows[0].stock,
+          valueAfterCents: rows[0].value_cents,
+          reason: `Reversión de compra: ${input.reason}`,
+          actor,
+        });
+      }
+      const ids = actorIds(actor);
+      const [reversal] =
+        await tx`insert into purchase_reversals(purchase_id,idempotency_key,reason,created_by_device_id,created_by_user_id) values(${purchaseId},${input.idempotencyKey},${input.reason},${ids.device},${ids.user}) returning id`;
+      await tx`update purchase_documents set status='reversed',reversed_at=now() where id=${purchaseId}`;
+      await auditOperation(tx as unknown as Sql, actor, {
+        action: 'reverse',
+        entity: 'purchase',
+        entityId: purchaseId,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return { purchaseId, reversalId: reversal!.id, status: 'reversed' };
+    },
+  );
+}

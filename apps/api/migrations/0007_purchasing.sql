@@ -32,5 +32,11 @@ CREATE TABLE IF NOT EXISTS purchase_lines (
   allocated_acquisition_cents integer NOT NULL CHECK(allocated_acquisition_cents >= 0), inventory_value_cents integer NOT NULL CHECK(inventory_value_cents > 0),
   UNIQUE(purchase_id, ingredient_id)
 );
+CREATE TABLE IF NOT EXISTS purchase_reversals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), purchase_id uuid NOT NULL UNIQUE REFERENCES purchase_documents(id),
+  idempotency_key uuid NOT NULL UNIQUE, reason text NOT NULL, created_by_device_id uuid REFERENCES mobile_devices(id),
+  created_by_user_id uuid REFERENCES admin_users(id), created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((created_by_device_id IS NOT NULL AND created_by_user_id IS NULL) OR (created_by_device_id IS NULL AND created_by_user_id IS NOT NULL))
+);
 ALTER TABLE purchase_documents ADD CONSTRAINT purchase_documents_reversed_by_fk FOREIGN KEY(reversed_by_id) REFERENCES purchase_documents(id);
 CREATE INDEX IF NOT EXISTS purchase_documents_supplier_date_idx ON purchase_documents(supplier_id, created_at DESC);

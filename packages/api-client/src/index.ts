@@ -21,6 +21,7 @@ import {
   type StockReservationRequest,
   type StockReservationResolveRequest,
   type StockWasteRequest,
+  type PurchaseCreate,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -267,6 +268,32 @@ export class BjApiClient {
 
   writeOffStock(input: StockWasteRequest) {
     return this.post('/operator/inventory/write-offs', stockMutationResponseSchema, input);
+  }
+
+  createPurchase(input: PurchaseCreate) {
+    return this.post(
+      '/operator/purchasing/purchases',
+      z.object({
+        purchaseId: z.string().uuid(),
+        totalCents: z.number().int(),
+        lines: z.array(z.unknown()),
+        reused: z.boolean(),
+      }),
+      input,
+    );
+  }
+
+  reversePurchase(purchaseId: string, input: { idempotencyKey: string; reason: string }) {
+    return this.post(
+      `/operator/purchasing/purchases/${purchaseId}/reverse`,
+      z.object({
+        purchaseId: z.string().uuid(),
+        reversalId: z.string().uuid(),
+        status: z.literal('reversed'),
+        reused: z.boolean(),
+      }),
+      input,
+    );
   }
 
   /** Reads an authenticated SSE stream until it closes or is aborted. */

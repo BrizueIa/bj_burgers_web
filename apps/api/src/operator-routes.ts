@@ -219,6 +219,22 @@ export async function registerOperator(
       .code(result.statusCode)
       .send(Object.assign({}, result.result as object, { reused: result.reused }));
   });
+  app.post('/api/v1/operator/purchasing/purchases/:id/reverse', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'purchasing');
+    const { purchaseReversalSchema } = await import('@bj/contracts');
+    const { reversePurchase } = await import('./purchasing-service.js');
+    const result = await reversePurchase(
+      database.sql,
+      z.uuid().parse((request.params as { id: string }).id),
+      purchaseReversalSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply
+      .code(result.statusCode)
+      .send(Object.assign({}, result.result as object, { reused: result.reused }));
+  });
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',
     info: { title: 'B&J Burgers API', version: '1.1.0' },
