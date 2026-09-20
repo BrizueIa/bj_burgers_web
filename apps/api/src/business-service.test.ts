@@ -18,6 +18,7 @@ import {
   writeOffStock,
 } from './stock-ledger-service.js';
 import { createPurchase } from './purchasing-service.js';
+import { reversePurchase } from './purchasing-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -396,5 +397,54 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       lines: [{ appliedBaseQuantity: '1000.000', inventoryValueCents: 950 }],
     });
     expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
+  });
+  it('revierte una compra sin consumos posteriores y no permite repetirla', async () => {
+    const supplier = randomUUID(),
+      presentation = randomUUID(),
+      actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await pg.query('insert into suppliers(id,name) values($1,$2)', [
+      supplier,
+      'Proveedor reversión',
+    ]);
+    await pg.query(
+      'insert into ingredient_presentations(id,ingredient_id,supplier_id,name,base_quantity) values($1,$2,$3,$4,$5)',
+      [presentation, ingredient, supplier, 'Caja', '100'],
+    );
+    const purchaseResult = await createPurchase(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        supplierId: supplier,
+        reference: 'R-1',
+        paymentMethod: 'card',
+        fundsOrigin: 'external',
+        discountCents: 0,
+        acquisitionCents: 0,
+        lines: [
+          {
+            ingredientId: ingredient,
+            presentationId: presentation,
+            presentationQuantity: '1.000',
+            grossCents: 200,
+          },
+        ],
+      },
+      actor,
+    );
+    await reversePurchase(
+      sql,
+      purchaseResult.result.purchaseId,
+      { idempotencyKey: randomUUID(), reason: 'Factura capturada dos veces' },
+      actor,
+    );
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(0);
+    await expect(
+      reversePurchase(
+        sql,
+        purchaseResult.result.purchaseId,
+        { idempotencyKey: randomUUID(), reason: 'Segundo intento' },
+        actor,
+      ),
+    ).rejects.toThrow('ya fue revertida');
   });
 });
