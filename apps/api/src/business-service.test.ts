@@ -19,6 +19,7 @@ import {
 } from './stock-ledger-service.js';
 import { createPurchase } from './purchasing-service.js';
 import { reversePurchase } from './purchasing-service.js';
+import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -83,6 +84,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0005_pos_foundation.sql',
       '0006_stock_ledger.sql',
       '0007_purchasing.sql',
+      '0008_recipe_versions.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -97,7 +99,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -446,5 +448,69 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
         actor,
       ),
     ).rejects.toThrow('ya fue revertida');
+  });
+  it('versiona recetas con actor e idempotencia, conservando la composición anterior', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const firstInput = {
+      idempotencyKey: randomUUID(),
+      productId: 'burger',
+      targetMargin: 60,
+      overheadCents: 100,
+      components: [
+        {
+          kind: 'ingredient' as const,
+          ingredientId: ingredient,
+          quantity: '150',
+          removable: false,
+          extra: false,
+        },
+      ],
+    };
+    const first = await createRecipeVersion(sql, firstInput, actor);
+    expect(first).toMatchObject({ result: { versionNumber: 1 }, reused: false });
+    expect(await createRecipeVersion(sql, firstInput, actor)).toMatchObject({
+      result: first.result,
+      reused: true,
+    });
+    const second = await createRecipeVersion(
+      sql,
+      { ...firstInput, idempotencyKey: randomUUID(), targetMargin: 65 },
+      actor,
+    );
+    expect(second.result.versionNumber).toBe(2);
+    const state = await recipeVersionState(sql, 'burger');
+    expect(state.versions.map((version) => version.status)).toEqual(['active', 'retired']);
+    expect(state.components).toHaveLength(2);
+    await expect(
+      createRecipeVersion(
+        sql,
+        {
+          ...firstInput,
+          idempotencyKey: randomUUID(),
+          components: [
+            {
+              kind: 'product',
+              productId: 'burger',
+              quantity: '1',
+              removable: false,
+              extra: false,
+            },
+          ],
+        },
+        actor,
+      ),
+    ).rejects.toThrow('ciclo');
+  });
+  it('migra una receta existente una sola vez y conserva su composición', async () => {
+    const migration = (
+      await readFile(new URL('../migrations/0008_recipe_versions.sql', import.meta.url), 'utf8')
+    ).replace('CREATE EXTENSION IF NOT EXISTS pgcrypto;', '');
+    await pg.exec(migration);
+    await pg.exec(migration);
+    const migrated = await recipeVersionState(sql, 'burger');
+    expect(migrated.versions).toMatchObject([{ version_number: 1, status: 'active' }]);
+    expect(migrated.components).toMatchObject([
+      { component_kind: 'ingredient', ingredient_id: ingredient, quantity: '150.000' },
+    ]);
   });
 });

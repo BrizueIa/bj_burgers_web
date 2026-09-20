@@ -13,11 +13,14 @@ import {
   modifierSchema,
   productSchema,
   promotionSchema,
+  recipeVersionCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
 import { createOpaqueToken, digestToken } from './security.js';
 import { stockLedgerState } from './stock-ledger-service.js';
+import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
+import { requireCapability } from './pos-foundation-service.js';
 
 interface AdminContext {
   userId: string;
@@ -165,6 +168,28 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       .parse(request.query);
     reply.header('cache-control', 'no-store');
     return stockLedgerState(database.sql, limit, cursor);
+  });
+  app.get('/api/v1/admin/recipes/versions', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const { productId } = z
+      .object({ productId: z.string().min(1).optional() })
+      .parse(request.query);
+    reply.header('cache-control', 'no-store');
+    return recipeVersionState(database.sql, productId);
+  });
+  app.post('/api/v1/admin/recipes/versions', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'recipe_versions');
+    const outcome = await createRecipeVersion(
+      database.sql,
+      recipeVersionCreateSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result, { reused: outcome.reused }));
   });
   app.get('/api/v1/admin/purchasing', async (request, reply) => {
     const context = await protect(request, reply);

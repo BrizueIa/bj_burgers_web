@@ -320,6 +320,41 @@ export const recipeLines = pgTable(
   (table) => [primaryKey({ columns: [table.productId, table.ingredientId] })],
 );
 
+export const recipeVersions = pgTable(
+  'recipe_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    productId: text('product_id')
+      .notNull()
+      .references(() => products.id),
+    versionNumber: integer('version_number').notNull(),
+    targetMargin: integer('target_margin').notNull(),
+    overheadCents: integer('overhead_cents').notNull().default(0),
+    status: text('status').notNull(),
+    createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+    createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('recipe_versions_product_version_idx').on(table.productId, table.versionNumber),
+  ],
+);
+
+export const recipeVersionComponents = pgTable('recipe_version_components', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recipeVersionId: uuid('recipe_version_id')
+    .notNull()
+    .references(() => recipeVersions.id),
+  componentKind: text('component_kind').notNull(),
+  ingredientId: uuid('ingredient_id').references(() => stockIngredients.id),
+  componentProductId: text('component_product_id').references(() => products.id),
+  modifierId: text('modifier_id').references(() => modifiers.id),
+  quantity: numeric('quantity', { precision: 16, scale: 3 }).notNull(),
+  removable: boolean('removable').notNull().default(false),
+  extra: boolean('extra').notNull().default(false),
+});
+
 export const businessEntries = pgTable('business_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),

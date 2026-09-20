@@ -3,6 +3,7 @@ import {
   BadgeDollarSign,
   Clock3,
   ClipboardList,
+  ChefHat,
   Truck,
   Gift,
   LayoutDashboard,
@@ -21,6 +22,7 @@ type Tab =
   | 'promotions'
   | 'business'
   | 'inventory'
+  | 'recipes'
   | 'purchasing'
   | 'roulette'
   | 'devices';
@@ -101,6 +103,7 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'promotions', label: 'Promociones', icon: Tags },
   { id: 'business', label: 'Negocio', icon: Clock3 },
   { id: 'inventory', label: 'Inventario', icon: ClipboardList },
+  { id: 'recipes', label: 'Recetas', icon: ChefHat },
   { id: 'purchasing', label: 'Compras', icon: Truck },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
   { id: 'devices', label: 'Dispositivos', icon: Smartphone },
@@ -240,6 +243,313 @@ type Purchasing = {
     created_at: string;
   }>;
 };
+
+type RecipeVersions = {
+  versions: Array<{
+    id: string;
+    product_id: string;
+    product_name: string;
+    version_number: number;
+    target_margin: number;
+    overhead_cents: number;
+    status: 'draft' | 'active' | 'retired';
+    created_at: string;
+    activated_at: string | null;
+  }>;
+  components: Array<{
+    recipe_version_id: string;
+    component_kind: string;
+    component_name: string;
+    quantity: string;
+    removable: boolean;
+    extra: boolean;
+  }>;
+};
+
+function RecipeVersionsView({
+  data,
+  products,
+  ingredients,
+  modifiers,
+  csrf,
+  onSaved,
+}: {
+  data: RecipeVersions | null;
+  products: ProductRow[];
+  ingredients: StockLedgerState['ingredients'];
+  modifiers: ModifierRow[];
+  csrf: string;
+  onSaved(): void;
+}) {
+  const [productId, setProductId] = useState('');
+  const [targetMargin, setTargetMargin] = useState('65');
+  const [overhead, setOverhead] = useState('0');
+  const [kind, setKind] = useState<'ingredient' | 'product' | 'packaging' | 'modifier'>(
+    'ingredient',
+  );
+  const [componentId, setComponentId] = useState('');
+  const [componentQuantity, setComponentQuantity] = useState('');
+  const [components, setComponents] = useState<
+    Array<{
+      kind: 'ingredient' | 'product' | 'packaging' | 'modifier';
+      id: string;
+      name: string;
+      quantity: string;
+      removable: boolean;
+      extra: boolean;
+    }>
+  >([]);
+  const [error, setError] = useState('');
+  if (!data) return <p>Cargando recetas…</p>;
+  const selectable =
+    kind === 'product'
+      ? products.filter((product) => product.id !== productId)
+      : kind === 'modifier'
+        ? modifiers
+        : ingredients;
+  const addComponent = () => {
+    const selected = selectable.find((item) => item.id === componentId);
+    if (
+      !selected ||
+      !/^\d+(?:\.\d{1,3})?$/.test(componentQuantity) ||
+      Number(componentQuantity) <= 0
+    ) {
+      setError('Selecciona un componente y una cantidad de hasta tres decimales.');
+      return;
+    }
+    setComponents((current) => [
+      ...current,
+      {
+        kind,
+        id: selected.id,
+        name: selected.name,
+        quantity: componentQuantity,
+        removable: false,
+        extra: false,
+      },
+    ]);
+    setComponentId('');
+    setComponentQuantity('');
+    setError('');
+  };
+  const save = async () => {
+    if (!productId || !components.length) {
+      setError('Selecciona un producto y agrega al menos un componente.');
+      return;
+    }
+    try {
+      await request('/api/v1/admin/recipes/versions', {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          idempotencyKey: crypto.randomUUID(),
+          productId,
+          targetMargin: Number(targetMargin),
+          overheadCents: Math.round(Number(overhead) * 100),
+          components: components.map((component) => ({
+            kind: component.kind,
+            quantity: component.quantity,
+            removable: component.removable,
+            extra: component.extra,
+            ...(component.kind === 'product'
+              ? { productId: component.id }
+              : component.kind === 'modifier'
+                ? { modifierId: component.id }
+                : { ingredientId: component.id }),
+          })),
+        }),
+      });
+      setComponents([]);
+      onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No fue posible guardar la receta.');
+    }
+  };
+  const componentsFor = (versionId: string) =>
+    data.components.filter((component) => component.recipe_version_id === versionId);
+  return (
+    <div className="row-list">
+      <section className="admin-card">
+        <p className="eyebrow">Historial inmutable</p>
+        <h2>Versiones de recetas</h2>
+        <p>
+          Las nuevas versiones se habilitan por etapas en el servidor. Los cambios de precio de
+          lista permanecen separados del costo y la composición de la receta.
+        </p>
+      </section>
+      <section className="admin-card">
+        <p className="eyebrow">Nueva versión</p>
+        <h2>Composición confirmable</h2>
+        <div className="settings-grid">
+          <label>
+            Producto
+            <select value={productId} onChange={(event) => setProductId(event.target.value)}>
+              <option value="">Selecciona…</option>
+              {products.map((product) => (
+                <option value={product.id} key={product.id}>
+                  {product.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Margen objetivo (%)
+            <input value={targetMargin} onChange={(event) => setTargetMargin(event.target.value)} />
+          </label>
+          <label>
+            Costos fijos (MXN)
+            <input value={overhead} onChange={(event) => setOverhead(event.target.value)} />
+          </label>
+        </div>
+        <div className="settings-grid">
+          <label>
+            Tipo de componente
+            <select
+              value={kind}
+              onChange={(event) => {
+                setKind(event.target.value as typeof kind);
+                setComponentId('');
+              }}
+            >
+              <option value="ingredient">Insumo</option>
+              <option value="packaging">Empaque</option>
+              <option value="product">Producto o preparación</option>
+              <option value="modifier">Extra</option>
+            </select>
+          </label>
+          <label>
+            Componente
+            <select value={componentId} onChange={(event) => setComponentId(event.target.value)}>
+              <option value="">Selecciona…</option>
+              {selectable.map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Cantidad
+            <input
+              inputMode="decimal"
+              value={componentQuantity}
+              onChange={(event) => setComponentQuantity(event.target.value)}
+            />
+          </label>
+        </div>
+        <button className="secondary" onClick={addComponent}>
+          Agregar componente
+        </button>
+        {components.length ? (
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {components.map((component, index) => (
+                  <tr key={`${component.kind}-${component.id}-${index}`}>
+                    <td>{component.name}</td>
+                    <td>{component.quantity}</td>
+                    <td>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={component.removable}
+                          onChange={(event) =>
+                            setComponents((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, removable: event.target.checked }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                        Removible
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={component.extra}
+                          onChange={(event) =>
+                            setComponents((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, extra: event.target.checked }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                        Extra
+                      </label>
+                    </td>
+                    <td>
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          setComponents((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        Quitar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {error ? <p className="error">{error}</p> : null}
+        <button onClick={save}>Guardar nueva versión</button>
+      </section>
+      {data.versions.length ? (
+        data.versions.map((version) => (
+          <section className="admin-card" key={version.id}>
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">
+                  {version.status === 'active' ? 'Activa' : 'Histórica'} · v{version.version_number}
+                </p>
+                <h2>{version.product_name}</h2>
+              </div>
+              <p>
+                Margen objetivo {version.target_margin}% · costos fijos{' '}
+                {formatMoney(version.overhead_cents)}
+              </p>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Componente</th>
+                    <th>Clase</th>
+                    <th>Cantidad</th>
+                    <th>Regla</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {componentsFor(version.id).map((component) => (
+                    <tr key={`${version.id}-${component.component_name}`}>
+                      <td>{component.component_name}</td>
+                      <td>{component.component_kind}</td>
+                      <td>{component.quantity}</td>
+                      <td>
+                        {component.extra ? 'Extra' : component.removable ? 'Removible' : 'Base'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))
+      ) : (
+        <section className="admin-card">Aún no hay recetas versionadas.</section>
+      )}
+    </div>
+  );
+}
 function PurchasingView({ data }: { data: Purchasing | null }) {
   if (!data) return <p>Cargando compras…</p>;
   return (
@@ -1186,18 +1496,21 @@ export default function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [inventoryLedger, setInventoryLedger] = useState<StockLedgerState | null>(null);
   const [purchasing, setPurchasing] = useState<Purchasing | null>(null);
+  const [recipeVersions, setRecipeVersions] = useState<RecipeVersions | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   async function load(showNotice = false) {
-    const [data, ledger, purchasingData] = await Promise.all([
+    const [data, ledger, purchasingData, recipeVersionsData] = await Promise.all([
       request<Dashboard>('/api/v1/admin/dashboard'),
       request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
       request<Purchasing>('/api/v1/admin/purchasing'),
+      request<RecipeVersions>('/api/v1/admin/recipes/versions'),
     ]);
     setDashboard(data);
     setInventoryLedger(ledger);
     setPurchasing(purchasingData);
+    setRecipeVersions(recipeVersionsData);
     if (showNotice) {
       setNotice('Cambios guardados. La web pública se actualizará automáticamente.');
       window.setTimeout(() => setNotice(''), 4000);
@@ -1378,6 +1691,16 @@ export default function App() {
           <BusinessEditor value={dashboard.business.data} csrf={csrf} onSaved={() => load(true)} />
         )}
         {tab === 'inventory' && <InventoryLedger data={inventoryLedger} />}
+        {tab === 'recipes' && (
+          <RecipeVersionsView
+            data={recipeVersions}
+            products={dashboard.products}
+            ingredients={inventoryLedger?.ingredients ?? []}
+            modifiers={dashboard.modifiers}
+            csrf={csrf}
+            onSaved={() => load(true)}
+          />
+        )}
         {tab === 'purchasing' && <PurchasingView data={purchasing} />}
         {tab === 'roulette' && (
           <Roulette

@@ -22,6 +22,10 @@ import {
   type StockReservationResolveRequest,
   type StockWasteRequest,
   type PurchaseCreate,
+  recipeVersionMutationResponseSchema,
+  recipeVersionStateSchema,
+  type RecipeVersionCreate,
+  type RecipeVersionState,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -234,6 +238,15 @@ export class BjApiClient {
     lines: Array<{ ingredientId: string; quantity: number }>;
   }) {
     return this.post('/operator/business/recipes', z.object({ saved: z.literal(true) }), input);
+  }
+
+  createRecipeVersion(input: RecipeVersionCreate) {
+    return this.post('/operator/recipes/versions', recipeVersionMutationResponseSchema, input);
+  }
+
+  recipeVersions(productId?: string): Promise<RecipeVersionState> {
+    const query = productId ? `?productId=${encodeURIComponent(productId)}` : '';
+    return this.request(`/operator/recipes/versions${query}`, recipeVersionStateSchema);
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {
