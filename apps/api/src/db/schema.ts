@@ -277,6 +277,27 @@ export const stockLedgerMovements = pgTable('stock_ledger_movements', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const suppliers = pgTable('suppliers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  contactName: text('contact_name').notNull().default(''),
+  contactPhone: text('contact_phone').notNull().default(''),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export const ingredientPresentations = pgTable('ingredient_presentations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  supplierId: uuid('supplier_id').references(() => suppliers.id),
+  name: text('name').notNull(),
+  baseQuantity: numeric('base_quantity', { precision: 16, scale: 3 }).notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const productRecipes = pgTable('product_recipes', {
   productId: text('product_id')
     .primaryKey()

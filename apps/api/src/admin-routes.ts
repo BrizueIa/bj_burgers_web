@@ -166,6 +166,17 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     reply.header('cache-control', 'no-store');
     return stockLedgerState(database.sql, limit, cursor);
   });
+  app.get('/api/v1/admin/purchasing', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const [suppliers, presentations, purchases] = await Promise.all([
+      database.sql`select * from suppliers order by name`,
+      database.sql`select p.*,i.name as ingredient_name,s.name as supplier_name from ingredient_presentations p join stock_ingredients i on i.id=p.ingredient_id left join suppliers s on s.id=p.supplier_id order by i.name,p.name`,
+      database.sql`select p.*,s.name as supplier_name from purchase_documents p join suppliers s on s.id=p.supplier_id order by p.created_at desc limit 100`,
+    ]);
+    reply.header('cache-control', 'no-store');
+    return { suppliers, presentations, purchases };
+  });
 
   app.post('/api/v1/admin/devices', async (request, reply) => {
     const context = await protect(request, reply);

@@ -11,6 +11,9 @@ import {
   stockReservationRequestSchema,
   stockReservationResolveRequestSchema,
   stockWasteRequestSchema,
+  supplierCreateSchema,
+  presentationCreateSchema,
+  purchaseCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -42,6 +45,7 @@ import {
   stockLedgerState,
   writeOffStock,
 } from './stock-ledger-service.js';
+import { createPurchase } from './purchasing-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -179,6 +183,57 @@ export async function registerOperator(
     return reply
       .code(outcome.statusCode)
       .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/operator/purchasing/suppliers', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'purchasing');
+    const input = supplierCreateSchema.parse(request.body);
+    const rows =
+      await database.sql`insert into suppliers(name,contact_name,contact_phone) values(${input.name},${input.contactName},${input.contactPhone}) on conflict(name) do nothing returning *`;
+    if (!rows[0])
+      return reply.code(409).send({ message: 'Ya existe un proveedor con ese nombre.' });
+    return reply.code(201).send({ supplier: rows[0] });
+  });
+  app.post('/api/v1/operator/purchasing/presentations', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'purchasing');
+    const input = presentationCreateSchema.parse(request.body);
+    const rows =
+      await database.sql`insert into ingredient_presentations(ingredient_id,supplier_id,name,base_quantity) values(${input.ingredientId},${input.supplierId ?? null},${input.name},${input.baseQuantity}) on conflict(ingredient_id,name) do nothing returning *`;
+    if (!rows[0])
+      return reply.code(409).send({ message: 'Ya existe esa presentación para el ingrediente.' });
+    return reply.code(201).send({ presentation: rows[0] });
+  });
+  app.post('/api/v1/operator/purchasing/purchases', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'purchasing');
+    const result = await createPurchase(database.sql, purchaseCreateSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply
+      .code(result.statusCode)
+      .send(Object.assign({}, result.result as object, { reused: result.reused }));
+  });
+  app.post('/api/v1/operator/purchasing/purchases/:id/reverse', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'purchasing');
+    const { purchaseReversalSchema } = await import('@bj/contracts');
+    const { reversePurchase } = await import('./purchasing-service.js');
+    const result = await reversePurchase(
+      database.sql,
+      z.uuid().parse((request.params as { id: string }).id),
+      purchaseReversalSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply
+      .code(result.statusCode)
+      .send(Object.assign({}, result.result as object, { reused: result.reused }));
   });
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',
