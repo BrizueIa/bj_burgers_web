@@ -17,6 +17,7 @@ import {
   stockLedgerState,
   writeOffStock,
 } from './stock-ledger-service.js';
+import { createPurchase } from './purchasing-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
@@ -80,6 +81,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0004_business.sql',
       '0005_pos_foundation.sql',
       '0006_stock_ledger.sql',
+      '0007_purchasing.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -94,7 +96,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -359,5 +361,40 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     expect(ledger.ingredients[0]).toMatchObject({ stock: '800.000', value_cents: '8000.000000' });
     expect(ledger.movements.map((item) => item.movement_type)).toContain('count');
     expect(ledger.movements.map((item) => item.movement_type)).toContain('waste');
+  });
+  it('prorratea descuentos y gastos de compra sin alterar la equivalencia histórica', async () => {
+    const supplier = randomUUID(),
+      presentation = randomUUID();
+    await pg.query('insert into suppliers(id,name) values($1,$2)', [supplier, 'Proveedor']);
+    await pg.query(
+      'insert into ingredient_presentations(id,ingredient_id,supplier_id,name,base_quantity) values($1,$2,$3,$4,$5)',
+      [presentation, ingredient, supplier, 'Bolsa 1 kg', '1000'],
+    );
+    const result = await createPurchase(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        supplierId: supplier,
+        reference: 'F-1',
+        paymentMethod: 'cash',
+        fundsOrigin: 'external',
+        discountCents: 100,
+        acquisitionCents: 50,
+        lines: [
+          {
+            ingredientId: ingredient,
+            presentationId: presentation,
+            presentationQuantity: '1.000',
+            grossCents: 1000,
+          },
+        ],
+      },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
+    expect(result.result).toMatchObject({
+      totalCents: 950,
+      lines: [{ appliedBaseQuantity: '1000.000', inventoryValueCents: 950 }],
+    });
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
   });
 });
