@@ -37,7 +37,7 @@ export async function collectOrderPayment(
             throw new PosFoundationError(409, 'Abre un turno de caja antes de cobrar en efectivo.');
           session = row.id;
           change += p.receivedCents - p.appliedCents;
-          await tx`update cash_sessions set expected_cents=expected_cents+${p.appliedCents} where id=${row.id}`;
+          await tx`update cash_sessions set expected_cents=${row.expected_cents + p.appliedCents} where id=${row.id}`;
           await tx`insert into cash_movements(cash_session_id,idempotency_key,kind,amount_cents,reason,created_by_device_id) values(${row.id},gen_random_uuid(),'income',${p.appliedCents},'Cobro de comanda',${actor.kind === 'device' ? actor.deviceId : null})`;
         }
         await tx`insert into order_payments(order_id,cash_session_id,idempotency_key,method,received_cents,applied_cents,change_cents,created_by_device_id) values(${orderId},${session},gen_random_uuid(),${p.method},${p.receivedCents},${p.appliedCents},${p.receivedCents - p.appliedCents},${actor.kind === 'device' ? actor.deviceId : null})`;
@@ -93,8 +93,9 @@ export async function refundOrderPayment(
             'No hay efectivo esperado suficiente en el turno actual.',
           );
         session = row.id;
-        await tx`update cash_sessions set expected_cents=expected_cents-${input.amountCents} where id=${row.id}`;
-        await tx`insert into cash_movements(cash_session_id,idempotency_key,kind,amount_cents,reason,created_by_device_id) values(${row.id},gen_random_uuid(),'expense',-${input.amountCents},'Reembolso de comanda',${actor.kind === 'device' ? actor.deviceId : null})`;
+        const cashDelta = -input.amountCents;
+        await tx`update cash_sessions set expected_cents=${row.expected_cents + cashDelta} where id=${row.id}`;
+        await tx`insert into cash_movements(cash_session_id,idempotency_key,kind,amount_cents,reason,created_by_device_id) values(${row.id},gen_random_uuid(),'expense',${cashDelta},'Reembolso de comanda',${actor.kind === 'device' ? actor.deviceId : null})`;
       }
       await tx`insert into order_refunds(order_id,payment_id,cash_session_id,idempotency_key,method,amount_cents,reason,created_by_device_id) values(${orderId},${input.paymentId},${session},${input.idempotencyKey},${payment.method},${input.amountCents},${input.reason},${actor.kind === 'device' ? actor.deviceId : null})`;
       return { orderId, refundedCents: input.amountCents, method: payment.method };

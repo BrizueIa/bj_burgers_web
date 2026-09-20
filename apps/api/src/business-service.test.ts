@@ -22,6 +22,7 @@ import { reversePurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
 import { createUnifiedOrder, InMemoryOrderNotifier, updateOrderStatus } from './order-service.js';
+import { collectOrderPayment, refundOrderPayment } from './payment-service.js';
 import { seedCatalog } from '@bj/contracts';
 import {
   cashSessionState,
@@ -112,7 +113,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from order_refunds; delete from order_payments; delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from cash_movements; delete from cash_sessions; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -250,6 +251,46 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       expectedCents: 1500,
       differenceCents: -50,
     });
+  });
+
+  it('cobra pagos mixtos, calcula cambio y descuenta el reembolso de caja', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,idempotency_key,created_by_device_id) values(${orderId},'manual_whatsapp','Cliente',10000,10000,${randomUUID()},${device})`;
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor);
+    const payment = await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [
+          { method: 'card', receivedCents: 4000, appliedCents: 4000 },
+          { method: 'cash', receivedCents: 10000, appliedCents: 6000 },
+        ],
+      },
+      actor,
+    );
+    expect(payment.result).toMatchObject({
+      appliedCents: 10000,
+      changeCents: 4000,
+      balanceCents: 0,
+    });
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 6000 });
+    const [cashPayment] = await sql<
+      { id: string }[]
+    >`select id from order_payments where order_id=${orderId} and method='cash'`;
+    await refundOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        paymentId: cashPayment!.id,
+        amountCents: 2000,
+        reason: 'Devolución parcial',
+      },
+      actor,
+    );
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
   });
 
   it('no inventa costos para ingredientes sin compras', async () => {
