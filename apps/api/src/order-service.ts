@@ -637,12 +637,18 @@ async function updateOrderStatusInTransaction(
   deviceId: string,
 ) {
   const rows = await tx<
-    { status: OrderStatus }[]
-  >`select status from orders where id=${orderId} for update`;
+    { status: OrderStatus; total_cents: number }[]
+  >`select status,total_cents from orders where id=${orderId} for update`;
   const current = rows[0];
   if (!current) throw new OrderError(404, 'La comanda no existe.');
   if (!allowedTransitions[current.status].includes(nextStatus))
     throw new OrderError(409, 'Ese cambio de estado no está permitido.');
+  if (nextStatus === 'delivered') {
+    const [payment] =
+      await tx`select coalesce((select sum(applied_cents) from order_payments where order_id=${orderId}),0)::int as paid,coalesce((select sum(amount_cents) from order_refunds where order_id=${orderId}),0)::int as refunded`;
+    if (payment!.paid - payment!.refunded < current.total_cents)
+      throw new OrderError(409, 'La entrega exige pago completo.');
+  }
   if (nextStatus === 'cancelled' && current.status === 'new') {
     const reservations = await tx<
       { reservation_id: string; ingredient_id: string; quantity: string }[]
