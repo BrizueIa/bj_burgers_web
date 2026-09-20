@@ -105,6 +105,9 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
   const stockLedgerEnabled = capabilities.data?.some(
     (capability) => capability.key === 'stock_ledger' && capability.enabled,
   );
+  const productionEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'production' && capability.enabled,
+  );
   const openEditor = (mode: BusinessMode, productId?: string) =>
     router.push({
       pathname: '/(app)/business/[mode]',
@@ -272,11 +275,13 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
                 secondary
                 onPress={() => openEditor('recipe', product.id)}
               />
-              <Button
-                label="Registrar lote"
-                secondary
-                onPress={() => openEditor('production', product.id)}
-              />
+              {productionEnabled ? (
+                <Button
+                  label="Registrar lote"
+                  secondary
+                  onPress={() => openEditor('production', product.id)}
+                />
+              ) : null}
             </Card>
           ))}
         </>

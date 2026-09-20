@@ -47,7 +47,7 @@ export async function createProductionBatch(
           409,
           'La preparación sólo admite insumos y empaques base en esta etapa.',
         );
-      const ids = components.map((c) => c.ingredient_id!).sort();
+      const ids = [...new Set(components.map((c) => c.ingredient_id!))].sort();
       const inputs = await tx<
         { id: string; name: string; stock: string; reserved: string; value_cents: string }[]
       >`select id,name,stock::text,reserved::text,value_cents::text from stock_ingredients where id=any(${ids}) order by id for update`;
@@ -83,9 +83,17 @@ export async function createProductionBatch(
       >`select id,stock::text,value_cents::text,unit from stock_ingredients where preparation_product_id=${input.productId} for update`;
       let output = stockRows[0];
       if (!output) {
+        const preparationName = `Preparación · ${product.name}`;
+        const sameName = await tx<{ id: string }[]>`
+          select id from stock_ingredients where name=${preparationName} for update`;
+        if (sameName[0])
+          throw new PosFoundationError(
+            409,
+            'Ya existe un insumo con el nombre reservado para esta preparación.',
+          );
         const [created] = await tx<
           { id: string; stock: string; value_cents: string; unit: string }[]
-        >`insert into stock_ingredients(name,unit,preparation_product_id) values(${`Preparación · ${product.name}`},${input.outputUnit},${input.productId}) returning id,stock::text,value_cents::text,unit`;
+        >`insert into stock_ingredients(name,unit,preparation_product_id) values(${preparationName},${input.outputUnit},${input.productId}) returning id,stock::text,value_cents::text,unit`;
         output = created!;
       }
       if (output.unit !== input.outputUnit)
