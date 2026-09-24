@@ -56,6 +56,13 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @bj/api test:postgres
+      - name: Prepare isolated data for backup rehearsal
+        run: pnpm --filter @bj/api db:seed
+      - name: Rehearse PostgreSQL 17 backup and restore
+        env:
+          POS_REHEARSAL_SOURCE_URL: postgres://postgres:postgres@localhost:5432/bj_burgers_test
+          POS_REHEARSAL_ARTIFACT_DIR: ${{ runner.temp }}/bj-pos-backup-rehearsal
+        run: bash scripts/rehearse-postgres-restore.sh
       - run: pnpm check
 
   web-e2e:
