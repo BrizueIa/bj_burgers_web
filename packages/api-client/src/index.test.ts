@@ -29,6 +29,8 @@ describe('BjApiClient', () => {
           subtotalCents: 100,
           deliveryCents: 0,
           totalCents: 100,
+          manualDiscountCents: 0,
+          manualDiscountReason: '',
           paidCents: 0,
           refundedCents: 0,
           balanceCents: 100,

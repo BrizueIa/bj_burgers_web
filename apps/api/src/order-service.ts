@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type {
   Catalog,
+  AuthenticatedActor,
   Order,
   OrderCreateRequest,
   OrderItemInput,
@@ -173,12 +174,13 @@ function mapOrder(
     subtotalCents: row.subtotal_cents,
     deliveryCents: row.delivery_cents,
     totalCents: row.total_cents,
+    manualDiscountCents: row.manual_discount_cents ?? 0,
+    manualDiscountReason: row.manual_discount_reason ?? '',
     paidCents: row.paid_cents,
     refundedCents: row.refunded_cents,
-    balanceCents: Math.max(
-      0,
-      Number(row.total_cents) - Number(row.paid_cents) + Number(row.refunded_cents),
-    ),
+    balanceCents: ['delivered', 'cancelled'].includes(String(row.status))
+      ? 0
+      : Math.max(0, Number(row.total_cents) - Number(row.paid_cents) + Number(row.refunded_cents)),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
     quotedAt: asIso(row.quoted_at),
@@ -324,6 +326,8 @@ type OrderCreationOptions = {
   reserveInventory?: boolean;
   source?: 'manual_whatsapp' | 'pos';
   quotedAt?: boolean;
+  manualDiscountCents?: number;
+  manualDiscountReason?: string;
 };
 type Requirement = {
   ingredientId: string;
@@ -342,6 +346,25 @@ function scaledToQuantity(value: bigint) {
 }
 function multiplyQuantity(value: string, multiplier: bigint) {
   return scaledToQuantity((quantityToScaled(value) * multiplier) / qtyScale);
+}
+function allocateLineTotals(totalCents: number, weights: number[]) {
+  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+  if (weightTotal <= 0) return weights.map(() => 0);
+  const denominator = BigInt(weightTotal);
+  const shares = weights.map((weight, index) => {
+    const numerator = BigInt(totalCents) * BigInt(weight);
+    return { index, cents: Number(numerator / denominator), remainder: numerator % denominator };
+  });
+  let remaining = totalCents - shares.reduce((sum, share) => sum + share.cents, 0);
+  for (const share of [...shares].sort(
+    (left, right) =>
+      (left.remainder === right.remainder ? 0 : left.remainder > right.remainder ? -1 : 1) ||
+      left.index - right.index,
+  )) {
+    if (remaining-- <= 0) break;
+    shares[share.index]!.cents += 1;
+  }
+  return shares.sort((left, right) => left.index - right.index).map((share) => share.cents);
 }
 
 async function resolveInventoryRequirements(
@@ -477,9 +500,13 @@ async function createOrderInTransaction(
   tx: Sql,
   catalog: Catalog,
   input: OrderCreateRequest,
-  deviceId: string,
+  actor: AuthenticatedActor,
   options: OrderCreationOptions = {},
 ) {
+  const actorIds =
+    actor.kind === 'device'
+      ? { deviceId: actor.deviceId, userId: null }
+      : { deviceId: null, userId: actor.userId };
   const { productMap, modifierMap } = await validateItems(tx, input.items);
   const totals = calculateCart(
     catalog,
@@ -494,16 +521,38 @@ async function createOrderInTransaction(
       note: item.note,
     })),
   );
+  const manualDiscountCents = options.manualDiscountCents ?? 0;
+  if (manualDiscountCents > totals.totalCents)
+    throw new OrderError(
+      400,
+      'El descuento manual no puede superar el total después de promociones.',
+    );
+  if (manualDiscountCents > 0 && (options.manualDiscountReason?.trim().length ?? 0) < 3)
+    throw new OrderError(400, 'Un descuento manual requiere un motivo de al menos 3 caracteres.');
+  const finalSubtotalCents = totals.totalCents - manualDiscountCents;
+  const rawLineTotals = input.items.map((item) => {
+    const product = productMap.get(item.productId)!;
+    const modifiers = item.modifierIds.map((id) => modifierMap.get(id)!);
+    return (
+      (product.price_cents +
+        modifiers.reduce((sum, modifier) => sum + modifier.price_cents, 0) +
+        (item.combo ? COMBO_PRICE_CENTS : 0)) *
+      item.quantity
+    );
+  });
+  const allocatedLineTotals = allocateLineTotals(finalSubtotalCents, rawLineTotals);
   const resolved = options.reserveInventory
     ? await resolveInventoryRequirements(tx, input.items)
     : undefined;
   const inserted = await tx<{ id: string }[]>`
     insert into orders (
       source, customer_name, neighborhood, street_and_number, delivery_references, delivery_notes, raw_message,
-      promotion_snapshot, subtotal_cents, delivery_cents, total_cents, idempotency_key, created_by_device_id, fulfillment, quoted_at
+      promotion_snapshot, subtotal_cents, delivery_cents, total_cents, manual_discount_cents, manual_discount_reason,
+      idempotency_key, created_by_device_id, created_by_user_id, fulfillment, quoted_at
     ) values (
       ${options.source ?? 'manual_whatsapp'}, ${input.customerName}, ${input.neighborhood}, ${input.streetAndNumber}, ${input.references}, ${input.deliveryNotes}, ${input.rawMessage},
-      ${totals.promotion ? JSON.stringify(totals.promotion) : null}, ${totals.totalCents}, 0, ${totals.totalCents}, ${input.idempotencyKey}, ${deviceId}, ${options.fulfillment ?? 'delivery'},
+      ${totals.promotion ? JSON.stringify(totals.promotion) : null}, ${finalSubtotalCents}, 0, ${finalSubtotalCents}, ${manualDiscountCents}, ${options.manualDiscountReason?.trim() ?? ''},
+      ${input.idempotencyKey}, ${actorIds.deviceId}, ${actorIds.userId}, ${options.fulfillment ?? 'delivery'},
       case when ${options.quotedAt ?? false} then now() else null end
     ) returning id`;
   const orderId = inserted[0]?.id;
@@ -518,11 +567,7 @@ async function createOrderInTransaction(
           priceCents: COMBO_PRICE_CENTS,
         }
       : null;
-    const lineTotal =
-      (product.price_cents +
-        selectedModifiers.reduce((sum, modifier) => sum + modifier.price_cents, 0) +
-        (item.combo ? COMBO_PRICE_CENTS : 0)) *
-      item.quantity;
+    const lineTotal = allocatedLineTotals[index]!;
     await tx`
       insert into order_items (order_id, product_id, product_name, unit_price_cents, quantity, removed_ingredients, modifiers, combo, note, line_total_cents, composition_snapshot)
       values (${orderId}, ${product.id}, ${product.name}, ${product.price_cents}, ${item.quantity}, ${JSON.stringify(item.removedIngredients)}, ${JSON.stringify(selectedModifiers.map((modifier) => ({ id: modifier.id, name: modifier.name, priceCents: modifier.price_cents })))}, ${combo ? JSON.stringify(combo) : null}, ${item.note}, ${lineTotal}, ${JSON.stringify(resolved?.compositions[index] ?? [])})`;
@@ -537,15 +582,15 @@ async function createOrderInTransaction(
         with updated as (
           update stock_ingredients set reserved=reserved+${need.quantity}::numeric
           where id=${need.ingredientId} and stock-reserved>=${need.quantity}::numeric returning id
-        ) insert into stock_reservations(ingredient_id,quantity,status,reference_type,reference_id,reason,created_by_device_id)
-        select id,${need.quantity}::numeric,'active','unified_order',${orderId},'Reserva de comanda unificada',${deviceId} from updated returning id`;
+        ) insert into stock_reservations(ingredient_id,quantity,status,reference_type,reference_id,reason,created_by_device_id,created_by_user_id)
+        select id,${need.quantity}::numeric,'active','unified_order',${orderId},'Reserva de comanda unificada',${actorIds.deviceId},${actorIds.userId} from updated returning id`;
       if (!reservation)
         throw new OrderError(409, 'No hay existencia disponible para confirmar la comanda.');
       await tx`insert into order_stock_reservations(order_id,reservation_id,component_kind) values(${orderId},${reservation.id},${need.componentKind})`;
     }
   }
-  await tx`insert into order_events (order_id, event_type, status, note, device_id)
-    values (${orderId}, 'created', 'new', ${options.source === 'pos' ? 'Comanda creada desde el POS.' : 'Comanda creada desde WhatsApp.'}, ${deviceId})`;
+  await tx`insert into order_events (order_id, event_type, status, note, device_id, created_by_user_id)
+    values (${orderId}, 'created', 'new', ${options.source === 'pos' ? 'Comanda creada desde el POS.' : 'Comanda creada desde WhatsApp.'}, ${actorIds.deviceId}, ${actorIds.userId})`;
   return getOrder(tx, orderId);
 }
 
@@ -558,7 +603,13 @@ export async function createOrder(
   options?: OrderCreationOptions,
 ) {
   const order = await sql.begin((tx) =>
-    createOrderInTransaction(tx as unknown as Sql, catalog, input, deviceId, options),
+    createOrderInTransaction(
+      tx as unknown as Sql,
+      catalog,
+      input,
+      { kind: 'device', deviceId, origin: 'android' },
+      options,
+    ),
   );
   if (!order) throw new OrderError(500, 'No fue posible crear la comanda.');
   notifier.publish(order.id as string);
@@ -571,14 +622,19 @@ export async function createUnifiedOrder(
   input: UnifiedOrderConfirm,
   deviceId: string,
   notifier: OrderNotifier,
+  actor: AuthenticatedActor = { kind: 'device', deviceId, origin: 'android' },
 ) {
   const request = {
     fulfillment: input.fulfillment,
     customerName: input.customerName,
     neighborhood: input.neighborhood,
     streetAndNumber: input.streetAndNumber,
+    manualDiscountCents: input.manualDiscountCents,
+    manualDiscountReason: input.manualDiscountReason,
     quotedTotalCents: input.quotedTotalCents,
     idempotencyKey: input.idempotencyKey,
+    source: input.source ?? 'pos',
+    rawMessage: input.rawMessage ?? '',
     items: input.items.map((item) => ({
       productId: item.productId,
       quantity: item.quantity,
@@ -595,7 +651,7 @@ export async function createUnifiedOrder(
       idempotencyKey: input.idempotencyKey,
       operation: 'unified-order.confirm',
       request,
-      actor: { kind: 'device', deviceId, origin: 'android' },
+      actor,
       statusCode: 201,
     },
     async (transaction) => {
@@ -612,10 +668,16 @@ export async function createUnifiedOrder(
           ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
         })),
       );
-      if (quote.totalCents !== input.quotedTotalCents)
+      if (input.manualDiscountCents > quote.totalCents)
+        throw new OrderError(
+          400,
+          'El descuento manual no puede superar el total después de promociones.',
+        );
+      const confirmedTotal = quote.totalCents - input.manualDiscountCents;
+      if (confirmedTotal !== input.quotedTotalCents)
         throw new OrderError(
           409,
-          `El total cambió a ${quote.totalCents} centavos. Vuelve a cotizar antes de confirmar.`,
+          `El total cambió a ${confirmedTotal} centavos. Vuelve a cotizar antes de confirmar.`,
         );
       const order = await createOrderInTransaction(
         transaction,
@@ -624,24 +686,27 @@ export async function createUnifiedOrder(
           ...input,
           customerName:
             input.customerName || (input.fulfillment === 'counter' ? 'Mostrador' : 'Cliente'),
-          rawMessage: '',
+          rawMessage: input.rawMessage ?? '',
           references: '',
           deliveryNotes: '',
         },
-        deviceId,
-        { fulfillment: input.fulfillment, reserveInventory: true, source: 'pos', quotedAt: true },
-      );
-      if (!order) throw new OrderError(500, 'No fue posible crear la comanda.');
-      await auditOperation(
-        transaction,
-        { kind: 'device', deviceId, origin: 'android' },
+        actor,
         {
-          action: 'create',
-          entity: 'unified_order',
-          entityId: order.id as string,
-          idempotencyKey: input.idempotencyKey,
+          fulfillment: input.fulfillment,
+          reserveInventory: true,
+          source: input.source ?? 'pos',
+          quotedAt: true,
+          manualDiscountCents: input.manualDiscountCents,
+          manualDiscountReason: input.manualDiscountReason,
         },
       );
+      if (!order) throw new OrderError(500, 'No fue posible crear la comanda.');
+      await auditOperation(transaction, actor, {
+        action: 'create',
+        entity: 'unified_order',
+        entityId: order.id as string,
+        idempotencyKey: input.idempotencyKey,
+      });
       return order as unknown as Record<string, never>;
     },
   );
@@ -658,19 +723,29 @@ const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
   cancelled: [],
 };
 
-async function updateOrderStatusInTransaction(
+export async function updateOrderStatusInTransaction(
   tx: Sql,
   orderId: string,
   nextStatus: OrderStatus,
   note: string,
-  deviceId: string,
+  actorInput: AuthenticatedActor | string,
 ) {
+  const actor: AuthenticatedActor =
+    typeof actorInput === 'string'
+      ? { kind: 'device', deviceId: actorInput, origin: 'android' }
+      : actorInput;
+  const actorIds =
+    actor.kind === 'device'
+      ? { deviceId: actor.deviceId, userId: null }
+      : { deviceId: null, userId: actor.userId };
   const rows = await tx<
-    { status: OrderStatus; total_cents: number }[]
-  >`select status,total_cents from orders where id=${orderId} for update`;
+    { status: OrderStatus; total_cents: number; fulfillment: string }[]
+  >`select status,total_cents,fulfillment from orders where id=${orderId} for update`;
   const current = rows[0];
   if (!current) throw new OrderError(404, 'La comanda no existe.');
-  if (!allowedTransitions[current.status].includes(nextStatus))
+  const counterHandoff =
+    current.status === 'ready' && nextStatus === 'delivered' && current.fulfillment === 'counter';
+  if (!allowedTransitions[current.status].includes(nextStatus) && !counterHandoff)
     throw new OrderError(409, 'Ese cambio de estado no está permitido.');
   if (nextStatus === 'delivered') {
     const [payment] =
@@ -722,7 +797,7 @@ async function updateOrderStatusInTransaction(
         stockAfter: consumed.stock,
         valueAfterCents: consumed.value_cents,
         reason: 'Consumo al preparar comanda unificada',
-        actor: { kind: 'device', deviceId, origin: 'android' },
+        actor,
       });
     }
   }
@@ -737,8 +812,8 @@ async function updateOrderStatusInTransaction(
     delivered_at=case when ${nextStatus}='delivered' then now() else delivered_at end,
     cancelled_at=case when ${nextStatus}='cancelled' then now() else cancelled_at end
     where id=${orderId}`;
-  await tx`insert into order_events (order_id, event_type, status, note, device_id)
-    values (${orderId}, 'status_changed', ${nextStatus}, ${note}, ${deviceId})`;
+  await tx`insert into order_events (order_id, event_type, status, note, device_id, created_by_user_id)
+    values (${orderId}, 'status_changed', ${nextStatus}, ${note}, ${actorIds.deviceId}, ${actorIds.userId})`;
   return getOrder(tx, orderId);
 }
 
@@ -747,10 +822,14 @@ export async function updateOrderStatus(
   orderId: string,
   nextStatus: OrderStatus,
   note: string,
-  deviceId: string,
+  actorInput: AuthenticatedActor | string,
   notifier: OrderNotifier,
   idempotencyKey?: string,
 ) {
+  const actor: AuthenticatedActor =
+    typeof actorInput === 'string'
+      ? { kind: 'device', deviceId: actorInput, origin: 'android' }
+      : actorInput;
   if (idempotencyKey) {
     const outcome = await runIdempotent(
       sql,
@@ -758,7 +837,7 @@ export async function updateOrderStatus(
         idempotencyKey,
         operation: 'order.status.update',
         request: { orderId, status: nextStatus, note },
-        actor: { kind: 'device', deviceId, origin: 'android' },
+        actor,
       },
       async (transaction) => {
         const order = await updateOrderStatusInTransaction(
@@ -766,20 +845,16 @@ export async function updateOrderStatus(
           orderId,
           nextStatus,
           note,
-          deviceId,
+          actor,
         );
         if (!order) throw new OrderError(500, 'No fue posible actualizar la comanda.');
-        await auditOperation(
-          transaction,
-          { kind: 'device', deviceId, origin: 'android' },
-          {
-            action: 'update',
-            entity: 'order_status',
-            entityId: orderId,
-            reason: note,
-            idempotencyKey,
-          },
-        );
+        await auditOperation(transaction, actor, {
+          action: 'update',
+          entity: 'order_status',
+          entityId: orderId,
+          reason: note,
+          idempotencyKey,
+        });
         return order as unknown as Record<string, never>;
       },
     );
@@ -788,7 +863,7 @@ export async function updateOrderStatus(
     return order;
   }
   const order = await sql.begin((tx) =>
-    updateOrderStatusInTransaction(tx as unknown as Sql, orderId, nextStatus, note, deviceId),
+    updateOrderStatusInTransaction(tx as unknown as Sql, orderId, nextStatus, note, actor),
   );
   if (!order) throw new OrderError(500, 'No fue posible actualizar la comanda.');
   notifier.publish(orderId);

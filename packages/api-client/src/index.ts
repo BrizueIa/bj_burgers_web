@@ -5,6 +5,7 @@ import {
   operatorDeviceActivationResponseSchema,
   orderDraftSchema,
   orderResponseSchema,
+  orderSchema,
   ordersResponseSchema,
   spinCodeIssueResponseSchema,
   stockLedgerStateSchema,
@@ -39,6 +40,9 @@ import {
   type OrderRefundCreate,
   orderTicketResponseSchema,
   type TicketIssue,
+  type ExpenseCreate,
+  profitabilityReportSchema,
+  type ProfitabilityReport,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -237,6 +241,18 @@ export class BjApiClient {
     );
   }
 
+  checkoutCounterOrder(id: string, input: OrderPaymentCreate) {
+    return this.post(
+      `/operator/orders/${id}/counter-checkout`,
+      z.object({
+        order: orderSchema,
+        changeCents: z.number().int().nonnegative(),
+        reused: z.boolean(),
+      }),
+      input,
+    );
+  }
+
   refundOrderPayment(id: string, input: OrderRefundCreate) {
     return this.post(
       '/operator/orders/' + id + '/refunds',
@@ -251,6 +267,30 @@ export class BjApiClient {
 
   issueOrderTicket(id: string, input: TicketIssue) {
     return this.post(`/operator/orders/${id}/ticket`, orderTicketResponseSchema, input);
+  }
+
+  createExpense(input: ExpenseCreate) {
+    return this.post(
+      '/operator/expenses',
+      z.object({
+        id: z.string().uuid(),
+        category: z.string(),
+        description: z.string(),
+        amountCents: z.number().int().positive(),
+        paymentMethod: z.enum(['cash', 'card', 'transfer']),
+        fundsOrigin: z.enum(['cash_session', 'external']),
+        cashSessionId: z.string().uuid().nullable(),
+        paymentId: z.string().uuid().nullable(),
+        occurredAt: z.string().datetime({ offset: true }),
+        reused: z.boolean(),
+      }),
+      input,
+    );
+  }
+
+  profitabilityReport(from: string, to: string, page = 1): Promise<ProfitabilityReport> {
+    const params = new URLSearchParams({ from, to, page: String(page), pageSize: '50' });
+    return this.request(`/operator/reports/profitability?${params}`, profitabilityReportSchema);
   }
 
   issueSpinCode(id: string, idempotencyKey = createIdempotencyKey()) {

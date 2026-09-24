@@ -164,8 +164,11 @@ export const orders = pgTable('orders', {
   subtotalCents: integer('subtotal_cents').notNull(),
   deliveryCents: integer('delivery_cents').notNull().default(0),
   totalCents: integer('total_cents').notNull(),
+  manualDiscountCents: integer('manual_discount_cents').notNull().default(0),
+  manualDiscountReason: text('manual_discount_reason').notNull().default(''),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),
   createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   quotedAt: timestamp('quoted_at', { withTimezone: true }),
   preparingAt: timestamp('preparing_at', { withTimezone: true }),
   deliveredAt: timestamp('delivered_at', { withTimezone: true }),
@@ -206,6 +209,7 @@ export const orderEvents = pgTable('order_events', {
   status: text('status'),
   note: text('note').notNull().default(''),
   deviceId: uuid('device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -335,6 +339,58 @@ export const ingredientPresentations = pgTable('ingredient_presentations', {
   name: text('name').notNull(),
   baseQuantity: numeric('base_quantity', { precision: 16, scale: 3 }).notNull(),
   active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const purchaseDocuments = pgTable('purchase_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  supplierId: uuid('supplier_id')
+    .notNull()
+    .references(() => suppliers.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  reference: text('reference').notNull().default(''),
+  status: text('status').notNull(),
+  subtotalCents: integer('subtotal_cents').notNull(),
+  discountCents: integer('discount_cents').notNull(),
+  acquisitionCents: integer('acquisition_cents').notNull(),
+  totalCents: integer('total_cents').notNull(),
+  paymentMethod: text('payment_method').notNull(),
+  fundsOrigin: text('funds_origin').notNull(),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  reversedById: uuid('reversed_by_id'),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  reversedAt: timestamp('reversed_at', { withTimezone: true }),
+});
+export const purchaseLines = pgTable('purchase_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  purchaseId: uuid('purchase_id')
+    .notNull()
+    .references(() => purchaseDocuments.id),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  presentationId: uuid('presentation_id')
+    .notNull()
+    .references(() => ingredientPresentations.id),
+  presentationQuantity: numeric('presentation_quantity', { precision: 16, scale: 3 }).notNull(),
+  appliedBaseQuantity: numeric('applied_base_quantity', { precision: 16, scale: 3 }).notNull(),
+  grossCents: integer('gross_cents').notNull(),
+  allocatedDiscountCents: integer('allocated_discount_cents').notNull(),
+  allocatedAcquisitionCents: integer('allocated_acquisition_cents').notNull(),
+  inventoryValueCents: integer('inventory_value_cents').notNull(),
+});
+export const purchaseReversals = pgTable('purchase_reversals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  purchaseId: uuid('purchase_id')
+    .notNull()
+    .unique()
+    .references(() => purchaseDocuments.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  reason: text('reason').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -482,6 +538,7 @@ export const orderPayments = pgTable('order_payments', {
   appliedCents: integer('applied_cents').notNull(),
   changeCents: integer('change_cents').notNull(),
   createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -493,12 +550,30 @@ export const orderRefunds = pgTable('order_refunds', {
   paymentId: uuid('payment_id')
     .notNull()
     .references(() => orderPayments.id),
+  orderItemId: uuid('order_item_id').references(() => orderItems.id),
   cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),
   method: text('method').notNull(),
   amountCents: integer('amount_cents').notNull(),
   reason: text('reason').notNull(),
   createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const operatingExpenses = pgTable('operating_expenses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  category: text('category').notNull(),
+  description: text('description').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  paymentMethod: text('payment_method').notNull(),
+  fundsOrigin: text('funds_origin').notNull(),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  linkedPaymentId: uuid('linked_payment_id').references(() => orderPayments.id),
+  incurredAt: timestamp('incurred_at', { withTimezone: true }).notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

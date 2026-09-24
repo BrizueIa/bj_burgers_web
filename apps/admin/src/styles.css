@@ -160,6 +160,29 @@ label {
   font-size: 0.88rem;
   font-weight: 600;
 }
+fieldset {
+  min-width: 0;
+  border: 1px solid #3c433d;
+  border-radius: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  padding: 0.8rem;
+}
+fieldset legend {
+  color: var(--gold);
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.check-row input[type='checkbox'] {
+  width: auto;
+  accent-color: var(--gold);
+}
 input,
 textarea {
   width: 100%;

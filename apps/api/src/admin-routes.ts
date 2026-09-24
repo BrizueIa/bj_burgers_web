@@ -18,6 +18,19 @@ import {
   ticketIssueSchema,
   orderPaymentCreateSchema,
   orderRefundCreateSchema,
+  capabilityActivationSchema,
+  capabilityKeySchema,
+  expenseCreateSchema,
+  profitabilityReportSchema,
+  reportPeriodSchema,
+  cashSessionOpenSchema,
+  cashMovementSchema,
+  cashSessionCloseSchema,
+  unifiedOrderQuoteSchema,
+  unifiedOrderConfirmSchema,
+  orderStatusUpdateSchema,
+  counterCheckoutSchema,
+  calculateCart,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -26,9 +39,28 @@ import { stockLedgerState } from './stock-ledger-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { requireCapability } from './pos-foundation-service.js';
 import { createProductionBatch } from './production-service.js';
-import { listOrders } from './order-service.js';
+import {
+  type InMemoryOrderNotifier,
+  createUnifiedOrder,
+  listOrders,
+  updateOrderStatus,
+} from './order-service.js';
 import { issueOrderTicket } from './ticket-service.js';
-import { collectOrderPayment, refundOrderPayment } from './payment-service.js';
+import {
+  checkoutCounterOrder,
+  collectOrderPayment,
+  refundOrderPayment,
+} from './payment-service.js';
+import { activateCapability, capabilityReadiness } from './capability-service.js';
+import { createOperatingExpense } from './expense-service.js';
+import { loadCatalog } from './catalog-repository.js';
+import { profitabilityCsv, profitabilityReport } from './profitability-service.js';
+import {
+  cashSessionState,
+  closeCashSession,
+  openCashSession,
+  recordCashMovement,
+} from './cash-session-service.js';
 
 interface AdminContext {
   userId: string;
@@ -70,7 +102,12 @@ async function triggerDeploy(config: AppConfig) {
   }
 }
 
-export async function registerAdmin(app: FastifyInstance, database: Database, config: AppConfig) {
+export async function registerAdmin(
+  app: FastifyInstance,
+  database: Database,
+  config: AppConfig,
+  notifier: InMemoryOrderNotifier,
+) {
   await app.register(cookie);
 
   app.post(
@@ -171,6 +208,144 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     reply.header('cache-control', 'no-store');
     return { orders: await listOrders(database.sql) };
   });
+  app.get('/api/v1/admin/orders/stream', async (request, reply) => {
+    const context = await sessionFor(request, database, config);
+    if (!context)
+      return reply.code(401).send({ message: 'Inicia sesión para consultar comandas.' });
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    reply.raw.write(`event: connected\ndata: ${JSON.stringify({ userId: context.userId })}\n\n`);
+    const unsubscribe = notifier.subscribe((orderId) => {
+      if (!reply.raw.writableEnded)
+        reply.raw.write(`event: order\ndata: ${JSON.stringify({ orderId })}\n\n`);
+    });
+    const heartbeat = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(': keep-alive\n\n');
+    }, 25000);
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+  app.get('/api/v1/admin/pos/catalog', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    reply.header('cache-control', 'no-store');
+    return { catalog: await loadCatalog(database) };
+  });
+  app.post('/api/v1/admin/unified-orders/quote', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    const input = unifiedOrderQuoteSchema.parse(request.body);
+    const quote = calculateCart(
+      await loadCatalog(database),
+      input.items.map((item, index) => ({
+        id: `admin-quote-${index}`,
+        productId: item.productId,
+        quantity: item.quantity,
+        removedIngredients: item.removedIngredients,
+        modifierIds: item.modifierIds,
+        combo: item.combo,
+        note: item.note,
+        ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+      })),
+    );
+    if (input.manualDiscountCents > quote.totalCents)
+      return reply
+        .code(400)
+        .send({ message: 'El descuento supera el total después de promociones.' });
+    const totalCents = quote.totalCents - input.manualDiscountCents;
+    return {
+      fulfillment: input.fulfillment,
+      subtotalCents: totalCents,
+      deliveryCents: 0,
+      totalCents,
+      manualDiscountCents: input.manualDiscountCents,
+      manualDiscountReason: input.manualDiscountReason,
+      promotion: quote.promotion,
+    };
+  });
+  app.post('/api/v1/admin/unified-orders', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    const input = unifiedOrderConfirmSchema.parse(request.body);
+    const outcome = await createUnifiedOrder(
+      database.sql,
+      await loadCatalog(database),
+      input,
+      '',
+      notifier,
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply.code(outcome.statusCode).send({ order: outcome.order, reused: outcome.reused });
+  });
+  app.put('/api/v1/admin/orders/:id/status', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const input = orderStatusUpdateSchema.parse(request.body);
+    if (!input.idempotencyKey)
+      return reply.code(400).send({ message: 'La actualización requiere clave idempotente.' });
+    try {
+      const order = await updateOrderStatus(
+        database.sql,
+        id,
+        input.status,
+        input.note,
+        { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+        notifier,
+        input.idempotencyKey,
+      );
+      return { order };
+    } catch (error) {
+      if (error instanceof Error && 'statusCode' in error)
+        return reply.code(Number(error.statusCode)).send({ message: error.message });
+      throw error;
+    }
+  });
+  app.post('/api/v1/admin/orders/:id/counter-checkout', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await checkoutCounterOrder(
+      database.sql,
+      id,
+      counterCheckoutSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+      notifier,
+    );
+    return { ...outcome };
+  });
+  app.get('/api/v1/admin/pos/capabilities', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    reply.header('cache-control', 'no-store');
+    return capabilityReadiness(database.sql);
+  });
+  app.put('/api/v1/admin/pos/capabilities/:key', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    const key = capabilityKeySchema.parse((request.params as { key: string }).key);
+    const outcome = await activateCapability(
+      database.sql,
+      key,
+      capabilityActivationSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
   app.post('/api/v1/admin/orders/:id/ticket', async (request, reply) => {
     const context = await protect(request, reply);
     if (!context) return;
@@ -209,6 +384,100 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
       { kind: 'admin', userId: context.userId, origin: 'admin_web' },
     );
     return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/admin/expenses', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'expenses');
+    const outcome = await createOperatingExpense(
+      database.sql,
+      expenseCreateSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/admin/expenses', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    reply.header('cache-control', 'no-store');
+    const expenses = await database.sql`
+      select e.*,u.email as admin_email,d.name as device_name
+      from operating_expenses e left join admin_users u on u.id=e.created_by_user_id
+      left join mobile_devices d on d.id=e.created_by_device_id
+      order by e.incurred_at desc,e.id desc limit 200`;
+    return { expenses };
+  });
+  app.get('/api/v1/admin/reports/profitability', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'profitability_reports');
+    const query = reportPeriodSchema.parse(request.query);
+    const report = await profitabilityReport(database.sql, query);
+    return profitabilityReportSchema.parse(report);
+  });
+  app.get('/api/v1/admin/cash-session', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    reply.header('cache-control', 'no-store');
+    return cashSessionState(database.sql);
+  });
+  app.post('/api/v1/admin/cash-session/open', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await openCashSession(database.sql, cashSessionOpenSchema.parse(request.body), {
+      kind: 'admin',
+      userId: context.userId,
+      origin: 'admin_web',
+    });
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/admin/cash-session/movements', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await recordCashMovement(database.sql, cashMovementSchema.parse(request.body), {
+      kind: 'admin',
+      userId: context.userId,
+      origin: 'admin_web',
+    });
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.post('/api/v1/admin/cash-session/close', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await closeCashSession(
+      database.sql,
+      cashSessionCloseSchema.parse(request.body),
+      {
+        kind: 'admin',
+        userId: context.userId,
+        origin: 'admin_web',
+      },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/admin/reports/profitability.csv', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'profitability_reports');
+    const query = reportPeriodSchema.pick({ from: true, to: true }).parse(request.query);
+    const csv = await profitabilityCsv(database.sql, query);
+    reply.header('content-type', 'text/csv; charset=utf-8');
+    reply.header(
+      'content-disposition',
+      `attachment; filename="bj-rentabilidad-${query.from}-${query.to}.csv"`,
+    );
+    return csv;
   });
 
   app.get('/api/v1/admin/inventory/ledger', async (request, reply) => {

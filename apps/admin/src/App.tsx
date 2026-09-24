@@ -10,11 +10,14 @@ import {
   LoaderCircle,
   LogOut,
   Save,
+  ShieldCheck,
+  ReceiptText,
   ShoppingBag,
   Smartphone,
   Tags,
 } from 'lucide-react';
 import type {
+  Catalog,
   BusinessSettings,
   Order,
   OrderTicket,
@@ -31,6 +34,11 @@ type Tab =
   | 'recipes'
   | 'purchasing'
   | 'orders'
+  | 'pos'
+  | 'activation'
+  | 'expenses'
+  | 'cash'
+  | 'reports'
   | 'roulette'
   | 'devices';
 type CategoryRow = {
@@ -113,6 +121,11 @@ const tabItems: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> 
   { id: 'recipes', label: 'Recetas', icon: ChefHat },
   { id: 'purchasing', label: 'Compras', icon: Truck },
   { id: 'orders', label: 'Comandas', icon: ClipboardList },
+  { id: 'pos', label: 'Vender', icon: ShoppingBag },
+  { id: 'expenses', label: 'Gastos', icon: ReceiptText },
+  { id: 'cash', label: 'Caja', icon: BadgeDollarSign },
+  { id: 'reports', label: 'Reportes', icon: BadgeDollarSign },
+  { id: 'activation', label: 'Activación POS', icon: ShieldCheck },
   { id: 'roulette', label: 'Ruleta', icon: Gift },
   { id: 'devices', label: 'Dispositivos', icon: Smartphone },
 ];
@@ -128,10 +141,69 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new Error(
+    throw new AdminApiError(
       typeof body.message === 'string' ? body.message : 'No fue posible completar la operación.',
+      response.status,
     );
   return body as T;
+}
+
+class AdminApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+type PendingAdminOperation = { fingerprint: string; key: string };
+const pendingAdminOperations = new Map<string, PendingAdminOperation>();
+function pendingStorageKey(scope: string) {
+  return `bj-pos-pending:${scope}`;
+}
+function readAdminOperation(scope: string): PendingAdminOperation | undefined {
+  const inMemory = pendingAdminOperations.get(scope);
+  if (inMemory) return inMemory;
+  try {
+    const saved = sessionStorage.getItem(pendingStorageKey(scope));
+    const pending = saved ? (JSON.parse(saved) as PendingAdminOperation) : undefined;
+    if (pending) pendingAdminOperations.set(scope, pending);
+    return pending;
+  } catch {
+    return undefined;
+  }
+}
+function readAdminOperationPayload<T>(scope: string): T | undefined {
+  try {
+    const pending = readAdminOperation(scope);
+    return pending ? (JSON.parse(pending.fingerprint) as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function beginAdminOperation(scope: string, fingerprint: string): PendingAdminOperation | null {
+  const existing = readAdminOperation(scope);
+  if (existing && existing.fingerprint !== fingerprint) return null;
+  const pending = existing ?? { fingerprint, key: crypto.randomUUID() };
+  pendingAdminOperations.set(scope, pending);
+  try {
+    sessionStorage.setItem(pendingStorageKey(scope), JSON.stringify(pending));
+  } catch {
+    // The in-memory key still makes retries safe for this mounted screen.
+  }
+  return pending;
+}
+function finishAdminOperation(scope: string) {
+  pendingAdminOperations.delete(scope);
+  try {
+    sessionStorage.removeItem(pendingStorageKey(scope));
+  } catch {
+    // Storage may be disabled by the browser; the server remains authoritative.
+  }
+}
+function releaseRejectedAdminOperation(scope: string, cause: unknown) {
+  if (cause instanceof AdminApiError && cause.status < 500) finishAdminOperation(scope);
 }
 
 function formatMoney(cents: number) {
@@ -658,33 +730,53 @@ function ticketHtml(ticket: OrderTicket) {
         `<li>${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]}: ${formatMoney(payment.appliedCents)}</li>`,
     )
     .join('');
-  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>Ticket B&J</title><style>body{font:16px Arial,sans-serif;max-width:560px;margin:32px auto;color:#171717}h1,p{text-align:center}table{width:100%;border-collapse:collapse;margin:24px 0}td{padding:12px 0;border-bottom:1px solid #ddd}td:last-child{text-align:right}.total{text-align:right;font-size:20px;font-weight:bold}@media print{button{display:none}}</style><body><h1>B&amp;J Burgers</h1><p>Ticket ${escapeHtml(ticket.id.slice(0, 8).toUpperCase())}<br>${new Date(ticket.issuedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p><p>${escapeHtml(ticket.order.customerName || 'Mostrador')}</p><table>${rows}</table><p class="total">Total ${formatMoney(ticket.order.totalCents)}</p><ul>${payments}</ul><p style="text-align:center">Gracias por tu compra</p></body></html>`;
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>Ticket B&J</title><style>body{font:16px Arial,sans-serif;max-width:560px;margin:32px auto;color:#171717}h1,p{text-align:center}table{width:100%;border-collapse:collapse;margin:24px 0}td{padding:12px 0;border-bottom:1px solid #ddd}td:last-child{text-align:right}.total{text-align:right;font-size:20px;font-weight:bold}@media print{button{display:none}}</style><body><h1>B&amp;J Burgers</h1><p>Ticket ${escapeHtml(ticket.id.slice(0, 8).toUpperCase())}<br>${new Date(ticket.issuedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p><p>${escapeHtml(ticket.order.customerName || 'Mostrador')}</p><table>${rows}</table>${ticket.order.manualDiscountCents > 0 ? `<p>Descuento ${formatMoney(ticket.order.manualDiscountCents)} · ${escapeHtml(ticket.order.manualDiscountReason)}</p>` : ''}<p class="total">Total ${formatMoney(ticket.order.totalCents)}</p><ul>${payments}</ul><p style="text-align:center">Gracias por tu compra</p></body></html>`;
 }
 
 function RefundAction({ order, csrf, onSaved }: { order: Order; csrf: string; onSaved(): void }) {
+  const operationScope = `refund:${order.id}`;
+  const savedRefund = readAdminOperationPayload<{
+    paymentId: string;
+    orderItemId: string;
+    amountCents: number;
+    reason: string;
+  }>(operationScope);
   const refundable = order.payments.filter((payment) => payment.refundableCents > 0);
-  const [paymentId, setPaymentId] = useState(refundable[0]?.id ?? '');
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
+  const [paymentId, setPaymentId] = useState(savedRefund?.paymentId ?? refundable[0]?.id ?? '');
+  const [orderItemId, setOrderItemId] = useState(savedRefund?.orderItemId ?? '');
+  const [amount, setAmount] = useState(
+    savedRefund ? (savedRefund.amountCents / 100).toFixed(2) : '',
+  );
+  const [reason, setReason] = useState(savedRefund?.reason ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const retry = useRef<{ fingerprint: string; key: string } | undefined>(undefined);
   async function refund() {
     const payment = refundable.find((entry) => entry.id === paymentId);
     const amountCents = Math.round(Number(amount) * 100);
+    const fingerprint = JSON.stringify({
+      paymentId,
+      orderItemId,
+      amountCents,
+      reason: reason.trim(),
+    });
+    const isRetry = readAdminOperation(operationScope)?.fingerprint === fingerprint;
     if (
       !payment ||
       !Number.isSafeInteger(amountCents) ||
       amountCents <= 0 ||
-      amountCents > payment.refundableCents ||
+      (!isRetry && amountCents > payment.refundableCents) ||
       reason.trim().length < 3
     ) {
       setError('Elige un pago, un importe disponible y un motivo de al menos 3 caracteres.');
       return;
     }
-    const fingerprint = JSON.stringify({ paymentId, amountCents, reason: reason.trim() });
-    if (retry.current?.fingerprint !== fingerprint)
-      retry.current = { fingerprint, key: crypto.randomUUID() };
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError(
+        'Hay una devolución pendiente. Reinténtala con los mismos datos antes de cambiarla.',
+      );
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -692,17 +784,19 @@ function RefundAction({ order, csrf, onSaved }: { order: Order; csrf: string; on
         method: 'POST',
         headers: { 'x-csrf-token': csrf },
         body: JSON.stringify({
-          idempotencyKey: retry.current.key,
+          idempotencyKey: pending.key,
           paymentId,
+          ...(orderItemId ? { orderItemId } : {}),
           amountCents,
           reason: reason.trim(),
         }),
       });
-      retry.current = undefined;
+      finishAdminOperation(operationScope);
       setAmount('');
       setReason('');
       onSaved();
     } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
       setError(cause instanceof Error ? cause.message : 'No se pudo registrar la devolución.');
     } finally {
       setBusy(false);
@@ -720,6 +814,17 @@ function RefundAction({ order, csrf, onSaved }: { order: Order; csrf: string; on
               <option value={payment.id} key={payment.id}>
                 {{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]} ·{' '}
                 {formatMoney(payment.refundableCents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Partida (opcional)
+          <select value={orderItemId} onChange={(event) => setOrderItemId(event.target.value)}>
+            <option value="">Importe general de la comanda</option>
+            {order.items.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.quantity} × {item.productName} · {formatMoney(item.lineTotalCents)}
               </option>
             ))}
           </select>
@@ -751,17 +856,249 @@ function RefundAction({ order, csrf, onSaved }: { order: Order; csrf: string; on
   );
 }
 
+function PaymentAction({ order, csrf, onSaved }: { order: Order; csrf: string; onSaved(): void }) {
+  const [method, setMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
+  const [received, setReceived] = useState('');
+  const [splitMethod, setSplitMethod] = useState<'none' | 'cash' | 'card' | 'transfer'>('none');
+  const [splitAmount, setSplitAmount] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const operationScope = `payment:${order.id}`;
+  if (order.balanceCents <= 0 || ['cancelled', 'delivered'].includes(order.status)) return null;
+  async function collect() {
+    const receivedCents = Math.round(Number(received) * 100);
+    if (!Number.isSafeInteger(receivedCents) || receivedCents <= 0) {
+      setError('Escribe un importe válido.');
+      return;
+    }
+    const splitCents = splitMethod === 'none' ? 0 : Math.round(Number(splitAmount) * 100);
+    const appliedCents = order.balanceCents - splitCents;
+    if (
+      appliedCents <= 0 ||
+      receivedCents < appliedCents ||
+      (method !== 'cash' && receivedCents !== appliedCents) ||
+      (splitMethod !== 'none' && (!Number.isSafeInteger(splitCents) || splitCents <= 0))
+    ) {
+      setError('Revisa el saldo y la distribución entre medios.');
+      return;
+    }
+    const payments = [
+      { method, receivedCents, appliedCents },
+      ...(splitMethod === 'none'
+        ? []
+        : [{ method: splitMethod, receivedCents: splitCents, appliedCents: splitCents }]),
+    ];
+    const fingerprint = JSON.stringify({ orderId: order.id, payments });
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError('Hay un cobro pendiente. Reinténtalo con los mismos datos antes de cambiarlo.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const path =
+        order.fulfillment === 'counter' &&
+        order.status === 'ready' &&
+        appliedCents + splitCents === order.balanceCents
+          ? `/api/v1/admin/orders/${order.id}/counter-checkout`
+          : `/api/v1/admin/orders/${order.id}/payments`;
+      await request(path, {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({ idempotencyKey: pending.key, payments }),
+      });
+      finishAdminOperation(operationScope);
+      setReceived('');
+      setSplitAmount('');
+      setSplitMethod('none');
+      onSaved();
+    } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudo registrar el cobro; reintenta sin cambiar los datos.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <details>
+      <summary>Cobrar · saldo {formatMoney(order.balanceCents)}</summary>
+      <div className="form-row">
+        <label>
+          Medio
+          <select
+            value={method}
+            onChange={(event) => {
+              const selected = event.target.value as typeof method;
+              setMethod(selected);
+              if (splitMethod === selected) setSplitMethod('none');
+            }}
+          >
+            <option value="cash">Efectivo</option>
+            <option value="card">Tarjeta</option>
+            <option value="transfer">Transferencia</option>
+          </select>
+        </label>
+        <label>
+          Recibido (MXN)
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={received}
+            onChange={(event) => setReceived(event.target.value)}
+          />
+        </label>
+      </div>
+      {order.fulfillment === 'counter' && order.status === 'ready' && (
+        <div className="form-row">
+          <label>
+            Dividir en
+            <select
+              value={splitMethod}
+              onChange={(event) => setSplitMethod(event.target.value as typeof splitMethod)}
+            >
+              <option value="none">Un medio</option>
+              {(['cash', 'card', 'transfer'] as const)
+                .filter((value) => value !== method)
+                .map((value) => (
+                  <option key={value} value={value}>
+                    + {{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[value]}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {splitMethod !== 'none' && (
+            <label>
+              Importe del segundo medio
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={splitAmount}
+                onChange={(event) => setSplitAmount(event.target.value)}
+              />
+            </label>
+          )}
+        </div>
+      )}
+      {method === 'cash' &&
+        received &&
+        Number(received) * 100 >
+          order.balanceCents - (splitMethod === 'none' ? 0 : Number(splitAmount) * 100) && (
+          <p>
+            Cambio:{' '}
+            {formatMoney(
+              Math.max(
+                0,
+                Math.round(Number(received) * 100) -
+                  (order.balanceCents -
+                    (splitMethod === 'none' ? 0 : Math.round(Number(splitAmount) * 100))),
+              ),
+            )}
+          </p>
+        )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="secondary" disabled={busy} onClick={() => void collect()}>
+        {busy
+          ? 'Registrando…'
+          : order.fulfillment === 'counter' && order.status === 'ready'
+            ? 'Cobrar y entregar'
+            : 'Registrar cobro'}
+      </button>
+    </details>
+  );
+}
+
+function StatusAction({ order, csrf, onSaved }: { order: Order; csrf: string; onSaved(): void }) {
+  const next: Partial<Record<Order['status'], Order['status']>> = {
+    new: 'preparing',
+    preparing: 'ready',
+    ready: 'out_for_delivery',
+    out_for_delivery: 'delivered',
+  };
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const operationScope = `status:${order.id}`;
+  const status = next[order.status];
+  async function advance(target: Order['status']) {
+    const fingerprint = JSON.stringify({ orderId: order.id, status: target });
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError('Hay un cambio de estado pendiente. Reinténtalo antes de realizar otro.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await request(`/api/v1/admin/orders/${order.id}/status`, {
+        method: 'PUT',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          status: target,
+          note: 'Actualización desde administración',
+          idempotencyKey: pending.key,
+        }),
+      });
+      finishAdminOperation(operationScope);
+      onSaved();
+    } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
+      setError(cause instanceof Error ? cause.message : 'No se pudo cambiar el estado.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!status && order.status !== 'new' && order.status !== 'preparing' && order.status !== 'ready')
+    return null;
+  return (
+    <div>
+      {status && (
+        <button className="secondary" disabled={busy} onClick={() => void advance(status)}>
+          {
+            (
+              {
+                preparing: 'Iniciar',
+                ready: 'Lista',
+                out_for_delivery: 'En reparto',
+                delivered: 'Entregar',
+              } as Record<string, string>
+            )[status]
+          }
+        </button>
+      )}
+      {['new', 'preparing', 'ready'].includes(order.status) && (
+        <button className="secondary" disabled={busy} onClick={() => void advance('cancelled')}>
+          Cancelar
+        </button>
+      )}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
 function OrdersView({
   orders,
   csrf,
+  capabilities,
   onSaved,
 }: {
   orders: Order[] | null;
   csrf: string;
+  capabilities: Record<string, boolean>;
   onSaved(): void;
 }) {
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const ticketKeys = useRef<Record<string, string>>({});
   async function printTicket(orderId: string) {
     const popup = window.open('', '_blank');
     if (!popup) {
@@ -772,12 +1109,14 @@ function OrdersView({
     setBusyId(orderId);
     setError('');
     try {
+      const idempotencyKey =
+        ticketKeys.current[orderId] ?? (ticketKeys.current[orderId] = crypto.randomUUID());
       const result = await request<{ ticket: OrderTicket }>(
         `/api/v1/admin/orders/${orderId}/ticket`,
         {
           method: 'POST',
           headers: { 'x-csrf-token': csrf },
-          body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+          body: JSON.stringify({ idempotencyKey }),
         },
       );
       popup.document.open();
@@ -785,6 +1124,7 @@ function OrdersView({
       popup.document.close();
       popup.focus();
       popup.print();
+      delete ticketKeys.current[orderId];
     } catch (cause) {
       popup.close();
       setError(cause instanceof Error ? cause.message : 'No se pudo emitir el ticket.');
@@ -810,11 +1150,13 @@ function OrdersView({
               <th>Cliente</th>
               <th>Modalidad</th>
               <th>Estado</th>
+              <th>Preparación / entrega</th>
               <th>Total</th>
               <th>Cobrado / saldo</th>
+              <th>Cobro</th>
               <th>Partidas</th>
-              <th>Ticket</th>
               <th>Devolución</th>
+              <th>Ticket</th>
             </tr>
           </thead>
           <tbody>
@@ -831,19 +1173,31 @@ function OrdersView({
                         : 'Domicilio'}
                   </td>
                   <td>{order.status}</td>
+                  <td>
+                    {capabilities.unified_orders && (
+                      <StatusAction order={order} csrf={csrf} onSaved={onSaved} />
+                    )}
+                  </td>
                   <td>{formatMoney(order.totalCents)}</td>
                   <td>
                     {formatMoney(order.paidCents - order.refundedCents)} /{' '}
                     {formatMoney(order.balanceCents)}
                   </td>
                   <td>
+                    {capabilities.payments_refunds && (
+                      <PaymentAction order={order} csrf={csrf} onSaved={onSaved} />
+                    )}
+                  </td>
+                  <td>
                     {order.items.map((item) => item.quantity + '× ' + item.productName).join(', ')}
                   </td>
                   <td>
-                    <RefundAction order={order} csrf={csrf} onSaved={onSaved} />
+                    {capabilities.payments_refunds && (
+                      <RefundAction order={order} csrf={csrf} onSaved={onSaved} />
+                    )}
                   </td>
                   <td>
-                    {order.status === 'delivered' ? (
+                    {capabilities.pos_tickets && order.status === 'delivered' ? (
                       <button
                         className="secondary"
                         disabled={busyId === order.id}
@@ -859,13 +1213,1223 @@ function OrdersView({
               ))
             ) : (
               <tr>
-                <td colSpan={9}>Aún no hay comandas.</td>
+                <td colSpan={11}>Aún no hay comandas.</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
     </section>
+  );
+}
+
+function AdminPos({
+  csrf,
+  enabled,
+  onCreated,
+}: {
+  csrf: string;
+  enabled: boolean;
+  onCreated(): void;
+}) {
+  const operationScope = 'new-order';
+  const savedOrder = readAdminOperationPayload<{
+    fulfillment: string;
+    customerName: string;
+    neighborhood: string;
+    streetAndNumber: string;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      removedIngredients: string[];
+      modifierIds: string[];
+      combo: boolean;
+      note: string;
+      drinkProductId?: string;
+    }>;
+    manualDiscountCents: number;
+    manualDiscountReason: string;
+    quotedTotalCents: number;
+  }>(operationScope);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [productId, setProductId] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [removedIngredients, setRemovedIngredients] = useState<string[]>([]);
+  const [modifierIds, setModifierIds] = useState<string[]>([]);
+  const [combo, setCombo] = useState(false);
+  const [drinkProductId, setDrinkProductId] = useState('');
+  const [items, setItems] = useState<
+    Array<{
+      productId: string;
+      quantity: number;
+      removedIngredients: string[];
+      modifierIds: string[];
+      combo: boolean;
+      note: string;
+      drinkProductId?: string;
+    }>
+  >(savedOrder?.items ?? []);
+  const [fulfillment, setFulfillment] = useState(savedOrder?.fulfillment ?? 'counter');
+  const [customerName, setCustomerName] = useState(savedOrder?.customerName ?? '');
+  const [neighborhood, setNeighborhood] = useState(savedOrder?.neighborhood ?? '');
+  const [streetAndNumber, setStreetAndNumber] = useState(savedOrder?.streetAndNumber ?? '');
+  const [manualDiscount, setManualDiscount] = useState(
+    savedOrder ? (savedOrder.manualDiscountCents / 100).toFixed(2) : '',
+  );
+  const [manualDiscountReason, setManualDiscountReason] = useState(
+    savedOrder?.manualDiscountReason ?? '',
+  );
+  const [quote, setQuote] = useState<{
+    totalCents: number;
+    promotion: Record<string, unknown> | null;
+  } | null>(savedOrder ? { totalCents: savedOrder.quotedTotalCents, promotion: null } : null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    request<{ catalog: Catalog }>('/api/v1/admin/pos/catalog')
+      .then(({ catalog: value }) => {
+        setCatalog(value);
+        setProductId(value.products.find((item) => item.available)?.id ?? '');
+      })
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : 'Activa el POS para vender.'),
+      );
+  }, [enabled]);
+  function changed() {
+    setQuote(null);
+  }
+  function addItem() {
+    const qty = Number(quantity);
+    if (!productId || !Number.isInteger(qty) || qty < 1 || qty > 40) return;
+    if (combo && !drinkProductId) {
+      setError('Elige la bebida del combo.');
+      return;
+    }
+    setItems((current) => [
+      ...current,
+      {
+        productId,
+        quantity: qty,
+        removedIngredients,
+        modifierIds,
+        combo,
+        note: '',
+        ...(combo ? { drinkProductId } : {}),
+      },
+    ]);
+    changed();
+  }
+  async function requestQuote() {
+    if (!items.length) return;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request<{
+        totalCents: number;
+        promotion: Record<string, unknown> | null;
+      }>('/api/v1/admin/unified-orders/quote', {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          fulfillment,
+          customerName,
+          neighborhood,
+          streetAndNumber,
+          manualDiscountCents: Math.round(Number(manualDiscount || 0) * 100),
+          manualDiscountReason: manualDiscountReason.trim(),
+          items,
+        }),
+      });
+      setQuote(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo cotizar.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirm() {
+    if (!quote) return;
+    const payload = {
+      fulfillment,
+      customerName,
+      neighborhood,
+      streetAndNumber,
+      manualDiscountCents: Math.round(Number(manualDiscount || 0) * 100),
+      manualDiscountReason: manualDiscountReason.trim(),
+      items,
+      quotedTotalCents: quote.totalCents,
+    };
+    const fingerprint = JSON.stringify(payload);
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError(
+        'Hay una comanda pendiente de confirmar. Reintenta esa misma solicitud antes de cambiarla.',
+      );
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await request('/api/v1/admin/unified-orders', {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({ ...payload, idempotencyKey: pending.key }),
+      });
+      finishAdminOperation(operationScope);
+      setItems([]);
+      setQuote(null);
+      onCreated();
+    } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudo confirmar. Reintenta con la misma operación.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!enabled)
+    return (
+      <section className="admin-card">
+        <p className="eyebrow">Venta · precio y existencia confirmados por la API</p>
+        <h2>Nueva venta</h2>
+        <p className="notice" role="alert">
+          El circuito de venta aún no está habilitado en el servidor.
+        </p>
+      </section>
+    );
+  return (
+    <section className="admin-card">
+      <p className="eyebrow">Venta · precio y existencia confirmados por la API</p>
+      <h2>Nueva venta</h2>
+      <div className="form-row">
+        <label>
+          Producto
+          <select
+            value={productId}
+            onChange={(event) => {
+              setProductId(event.target.value);
+              setRemovedIngredients([]);
+              setModifierIds([]);
+              setCombo(false);
+              setDrinkProductId('');
+              changed();
+            }}
+          >
+            {catalog?.products
+              .filter((product) => product.available)
+              .map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.name} · {formatMoney(product.priceCents)}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          Cantidad
+          <input
+            type="number"
+            min="1"
+            max="40"
+            step="1"
+            value={quantity}
+            onChange={(event) => setQuantity(event.target.value)}
+          />
+        </label>
+        <button className="secondary" onClick={addItem}>
+          Agregar
+        </button>
+      </div>
+      {(() => {
+        const selectedProduct = catalog?.products.find((product) => product.id === productId);
+        return selectedProduct ? (
+          <div className="settings-grid">
+            {selectedProduct.removableIngredients.length > 0 && (
+              <fieldset>
+                <legend>Quitar ingredientes</legend>
+                {selectedProduct.removableIngredients.map((ingredient) => (
+                  <label className="check-row" key={ingredient}>
+                    <input
+                      type="checkbox"
+                      checked={removedIngredients.includes(ingredient)}
+                      onChange={(event) =>
+                        setRemovedIngredients((current) =>
+                          event.target.checked
+                            ? [...current, ingredient]
+                            : current.filter((entry) => entry !== ingredient),
+                        )
+                      }
+                    />
+                    {ingredient}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {catalog?.modifiers.some((modifier) => modifier.available) && (
+              <fieldset>
+                <legend>Extras</legend>
+                {catalog.modifiers
+                  .filter((modifier) => modifier.available)
+                  .map((modifier) => (
+                    <label className="check-row" key={modifier.id}>
+                      <input
+                        type="checkbox"
+                        checked={modifierIds.includes(modifier.id)}
+                        onChange={(event) =>
+                          setModifierIds((current) =>
+                            event.target.checked
+                              ? [...current, modifier.id]
+                              : current.filter((entry) => entry !== modifier.id),
+                          )
+                        }
+                      />
+                      {modifier.name} · {formatMoney(modifier.priceCents)}
+                    </label>
+                  ))}
+              </fieldset>
+            )}
+            {selectedProduct.comboEligible && (
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={combo}
+                  onChange={(event) => setCombo(event.target.checked)}
+                />
+                Convertir en combo
+              </label>
+            )}
+            {combo && (
+              <label>
+                Bebida
+                <select
+                  value={drinkProductId}
+                  onChange={(event) => setDrinkProductId(event.target.value)}
+                >
+                  <option value="">Selecciona…</option>
+                  {catalog?.products
+                    .filter((product) => product.available && product.id !== productId)
+                    .map((product) => (
+                      <option value={product.id} key={product.id}>
+                        {product.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
+          </div>
+        ) : null;
+      })()}
+      <div className="row-list">
+        {items.map((item, index) => (
+          <p key={`${index}-${item.productId}`}>
+            {item.quantity} ×{' '}
+            {catalog?.products.find((product) => product.id === item.productId)?.name}{' '}
+            <button
+              className="secondary"
+              onClick={() => {
+                setItems((current) => current.filter((_, row) => row !== index));
+                changed();
+              }}
+            >
+              Quitar
+            </button>
+          </p>
+        ))}
+      </div>
+      <div className="form-row">
+        <label>
+          Modalidad
+          <select
+            value={fulfillment}
+            onChange={(event) => {
+              setFulfillment(event.target.value);
+              changed();
+            }}
+          >
+            <option value="counter">Mostrador</option>
+            <option value="pickup">Recoger</option>
+            <option value="delivery">Domicilio</option>
+          </select>
+        </label>
+        <label>
+          Cliente
+          <input
+            value={customerName}
+            onChange={(event) => {
+              setCustomerName(event.target.value);
+              changed();
+            }}
+          />
+        </label>
+      </div>
+      {fulfillment === 'delivery' && (
+        <div className="form-row">
+          <label>
+            Colonia
+            <input
+              value={neighborhood}
+              onChange={(event) => {
+                setNeighborhood(event.target.value);
+                changed();
+              }}
+            />
+          </label>
+          <label>
+            Dirección
+            <input
+              value={streetAndNumber}
+              onChange={(event) => {
+                setStreetAndNumber(event.target.value);
+                changed();
+              }}
+            />
+          </label>
+        </div>
+      )}
+      <div className="form-row">
+        <label>
+          Descuento manual (MXN)
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={manualDiscount}
+            onChange={(event) => {
+              setManualDiscount(event.target.value);
+              changed();
+            }}
+          />
+        </label>
+        <label>
+          Motivo del descuento
+          <input
+            value={manualDiscountReason}
+            maxLength={300}
+            onChange={(event) => {
+              setManualDiscountReason(event.target.value);
+              changed();
+            }}
+          />
+        </label>
+      </div>
+      {quote && (
+        <p className="notice">
+          Total cotizado por el servidor: <strong>{formatMoney(quote.totalCents)}</strong>
+          {quote.promotion ? ' · promoción aplicada' : ''}
+        </p>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="form-row">
+        <button
+          className="secondary"
+          disabled={busy || !items.length}
+          onClick={() => void requestQuote()}
+        >
+          Cotizar
+        </button>
+        <button disabled={busy || !quote} onClick={() => void confirm()}>
+          {busy ? 'Procesando…' : 'Confirmar comanda'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+type ExpenseRow = {
+  id: string;
+  category: string;
+  description: string;
+  amount_cents: number;
+  payment_method: string;
+  funds_origin: string;
+  linked_payment_id: string | null;
+  incurred_at: string;
+  admin_email: string | null;
+  device_name: string | null;
+};
+
+function ExpensesView({
+  csrf,
+  enabled,
+  onSaved,
+}: {
+  csrf: string;
+  enabled: boolean;
+  onSaved(): void;
+}) {
+  const operationScope = 'expense-create';
+  const savedExpense = readAdminOperationPayload<{
+    category: string;
+    description: string;
+    amountCents: number;
+    paymentMethod: string;
+    fundsOrigin: string;
+    occurredAt: string;
+    paymentId?: string;
+  }>(operationScope);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [category, setCategory] = useState(savedExpense?.category ?? 'other');
+  const [description, setDescription] = useState(savedExpense?.description ?? '');
+  const [amount, setAmount] = useState(
+    savedExpense ? (savedExpense.amountCents / 100).toFixed(2) : '',
+  );
+  const [paymentMethod, setPaymentMethod] = useState(savedExpense?.paymentMethod ?? 'cash');
+  const [fundsOrigin, setFundsOrigin] = useState(savedExpense?.fundsOrigin ?? 'cash_session');
+  const [paymentId, setPaymentId] = useState(savedExpense?.paymentId ?? '');
+  const [occurredAt, setOccurredAt] = useState(
+    savedExpense?.occurredAt ?? new Date().toISOString(),
+  );
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    const result = await request<{ expenses: ExpenseRow[] }>('/api/v1/admin/expenses');
+    setExpenses(result.expenses);
+  }
+  useEffect(() => {
+    void load().catch((cause) =>
+      setError(cause instanceof Error ? cause.message : 'No se pudieron cargar los gastos.'),
+    );
+  }, []);
+  async function save() {
+    const amountCents = Math.round(Number(amount) * 100);
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || description.trim().length < 3) {
+      setError('Escribe un importe válido y una descripción de al menos 3 caracteres.');
+      return;
+    }
+    const payload = {
+      category,
+      description: description.trim(),
+      amountCents,
+      paymentMethod,
+      fundsOrigin,
+      occurredAt,
+      paymentId: category === 'commission' ? paymentId.trim() : undefined,
+    };
+    const fingerprint = JSON.stringify(payload);
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError(
+        'Hay un gasto pendiente de guardar. Reinténtalo con los mismos datos antes de cambiarlo.',
+      );
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await request('/api/v1/admin/expenses', {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          ...payload,
+          idempotencyKey: pending.key,
+        }),
+      });
+      finishAdminOperation(operationScope);
+      setDescription('');
+      setAmount('');
+      setPaymentId('');
+      setOccurredAt(new Date().toISOString());
+      await load();
+      onSaved();
+    } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudo guardar el gasto. Reintenta la misma operación.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!enabled)
+    return (
+      <section className="admin-card">
+        <h2>Gastos</h2>
+        <p role="alert">
+          El registro de gastos está deshabilitado hasta activar la capacidad en el servidor.
+        </p>
+      </section>
+    );
+  return (
+    <div className="settings-grid">
+      <section className="admin-card">
+        <p className="eyebrow">Registro auditable</p>
+        <h2>Nuevo gasto</h2>
+        <label>
+          Categoría
+          <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            {[
+              ['rent', 'Renta'],
+              ['utilities', 'Servicios'],
+              ['supplies', 'Insumos operativos'],
+              ['maintenance', 'Mantenimiento'],
+              ['commission', 'Comisión de pago'],
+              ['other', 'Otro'],
+            ].map(([value, label]) => (
+              <option value={value} key={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Descripción
+          <input value={description} onChange={(event) => setDescription(event.target.value)} />
+        </label>
+        <label>
+          Importe (MXN)
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </label>
+        <label>
+          Medio
+          <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}>
+            <option value="cash">Efectivo</option>
+            <option value="card">Tarjeta</option>
+            <option value="transfer">Transferencia</option>
+          </select>
+        </label>
+        <label>
+          Origen
+          <select value={fundsOrigin} onChange={(event) => setFundsOrigin(event.target.value)}>
+            <option value="cash_session">Caja del turno</option>
+            <option value="external">Fondos externos</option>
+          </select>
+        </label>
+        {category === 'commission' ? (
+          <label>
+            ID del pago original
+            <input
+              value={paymentId}
+              onChange={(event) => setPaymentId(event.target.value)}
+              placeholder="UUID de la línea de pago"
+            />
+          </label>
+        ) : null}
+        {error ? (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <button className="primary" disabled={busy} onClick={() => void save()}>
+          {busy ? 'Guardando…' : 'Registrar gasto'}
+        </button>
+      </section>
+      <section className="admin-card">
+        <h2>Movimientos recientes</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Rubro</th>
+                <th>Descripción</th>
+                <th>Medio / origen</th>
+                <th>Importe</th>
+                <th>Registro</th>
+              </tr>
+            </thead>
+            <tbody>
+              {expenses.map((expense) => (
+                <tr key={expense.id}>
+                  <td>{formatDate(expense.incurred_at)}</td>
+                  <td>{capabilityLabels[expense.category] ?? expense.category}</td>
+                  <td>{expense.description}</td>
+                  <td>
+                    {expense.payment_method} ·{' '}
+                    {expense.funds_origin === 'cash_session' ? 'turno' : 'externo'}
+                  </td>
+                  <td>{formatMoney(expense.amount_cents)}</td>
+                  <td>{expense.admin_email ?? expense.device_name ?? '—'}</td>
+                </tr>
+              ))}
+              {!expenses.length ? (
+                <tr>
+                  <td colSpan={6}>Aún no hay gastos registrados.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type CashState = {
+  session: { id: string; openingFundCents: number; expectedCents: number; openedAt: string } | null;
+  movements: Array<{
+    id: string;
+    kind: string;
+    amountCents: number;
+    reason: string;
+    createdAt: string;
+  }>;
+};
+function CashView({ csrf, enabled }: { csrf: string; enabled: boolean }) {
+  const operationScope = 'cash-operation';
+  const savedCashOperation = readAdminOperationPayload<{
+    path: string;
+    payload: Record<string, unknown>;
+  }>(operationScope);
+  const savedCashPayload = savedCashOperation?.payload;
+  const [data, setData] = useState<CashState | null>(null);
+  const [amount, setAmount] = useState(
+    typeof savedCashPayload?.amountCents === 'number'
+      ? (savedCashPayload.amountCents / 100).toFixed(2)
+      : typeof savedCashPayload?.openingFundCents === 'number'
+        ? (savedCashPayload.openingFundCents / 100).toFixed(2)
+        : '',
+  );
+  const [counted, setCounted] = useState(
+    typeof savedCashPayload?.countedCents === 'number'
+      ? (savedCashPayload.countedCents / 100).toFixed(2)
+      : '',
+  );
+  const [kind, setKind] = useState(
+    typeof savedCashPayload?.kind === 'string' ? savedCashPayload.kind : 'income',
+  );
+  const [reason, setReason] = useState(
+    typeof savedCashPayload?.reason === 'string' ? savedCashPayload.reason : '',
+  );
+  const [note, setNote] = useState(
+    typeof savedCashPayload?.note === 'string' ? savedCashPayload.note : '',
+  );
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    setData(await request<CashState>('/api/v1/admin/cash-session'));
+  }
+  useEffect(() => {
+    void load().catch((cause) =>
+      setError(cause instanceof Error ? cause.message : 'No se pudo cargar caja.'),
+    );
+  }, []);
+  async function submit(path: string, payload: Record<string, unknown>) {
+    const fingerprint = JSON.stringify({ path, payload });
+    const pending = beginAdminOperation(operationScope, fingerprint);
+    if (!pending) {
+      setError(
+        'Hay un movimiento de caja pendiente. Reinténtalo con los mismos datos antes de cambiarlo.',
+      );
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await request(path, {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({ ...payload, idempotencyKey: pending.key }),
+      });
+      finishAdminOperation(operationScope);
+      await load();
+      setAmount('');
+      setReason('');
+      setNote('');
+    } catch (cause) {
+      releaseRejectedAdminOperation(operationScope, cause);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudo confirmar. Reintenta la misma operación.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  const cents = (value: string) => Math.round(Number(value) * 100);
+  if (!enabled)
+    return (
+      <section className="admin-card">
+        <h2>Caja {data?.session ? 'abierta' : 'cerrada'}</h2>
+        <p role="alert">
+          Los movimientos de caja están deshabilitados hasta activar la capacidad en el servidor.
+        </p>
+        {data?.session && (
+          <p>
+            Fondo inicial {formatMoney(data.session.openingFundCents)} · efectivo esperado{' '}
+            {formatMoney(data.session.expectedCents)}
+          </p>
+        )}
+      </section>
+    );
+  return (
+    <div className="settings-grid">
+      <section className="admin-card">
+        <p className="eyebrow">Turno compartido</p>
+        <h2>{data?.session ? 'Caja abierta' : 'Caja cerrada'}</h2>
+        {data?.session ? (
+          <>
+            <p>
+              Fondo inicial: {formatMoney(data.session.openingFundCents)} · Efectivo esperado:{' '}
+              <strong>{formatMoney(data.session.expectedCents)}</strong>
+            </p>
+            <div className="form-row">
+              <label>
+                Tipo
+                <select value={kind} onChange={(event) => setKind(event.target.value)}>
+                  <option value="income">Entrada</option>
+                  <option value="expense">Salida</option>
+                  <option value="withdrawal">Retiro</option>
+                </select>
+              </label>
+              <label>
+                Importe (MXN)
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                />
+              </label>
+              <label>
+                Motivo
+                <input value={reason} onChange={(event) => setReason(event.target.value)} />
+              </label>
+              <button
+                disabled={busy || cents(amount) <= 0 || reason.trim().length < 3}
+                onClick={() =>
+                  void submit('/api/v1/admin/cash-session/movements', {
+                    kind,
+                    amountCents: cents(amount),
+                    reason: reason.trim(),
+                  })
+                }
+              >
+                Registrar movimiento
+              </button>
+            </div>
+            <div className="form-row">
+              <label>
+                Efectivo contado (MXN)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={counted}
+                  onChange={(event) => setCounted(event.target.value)}
+                />
+              </label>
+              <label>
+                Nota de cierre
+                <input value={note} onChange={(event) => setNote(event.target.value)} />
+              </label>
+              <button
+                className="secondary"
+                disabled={busy || counted === '' || !Number.isSafeInteger(cents(counted))}
+                onClick={() =>
+                  void submit('/api/v1/admin/cash-session/close', {
+                    countedCents: cents(counted),
+                    note,
+                  })
+                }
+              >
+                Cerrar y conciliar
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="form-row">
+            <label>
+              Fondo inicial (MXN)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+            </label>
+            <button
+              disabled={busy || !Number.isSafeInteger(cents(amount)) || cents(amount) < 0}
+              onClick={() =>
+                void submit('/api/v1/admin/cash-session/open', { openingFundCents: cents(amount) })
+              }
+            >
+              Abrir turno
+            </button>
+          </div>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+      <section className="admin-card">
+        <h2>Movimientos del turno</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Tipo</th>
+                <th>Motivo</th>
+                <th>Importe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.movements.map((movement) => (
+                <tr key={movement.id}>
+                  <td>{formatDate(movement.createdAt)}</td>
+                  <td>{movement.kind}</td>
+                  <td>{movement.reason}</td>
+                  <td>{formatMoney(movement.amountCents)}</td>
+                </tr>
+              ))}
+              {!data?.movements.length && (
+                <tr>
+                  <td colSpan={4}>Sin movimientos en el turno abierto.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function localDate(daysAgo = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+type Profitability = {
+  from: string;
+  to: string;
+  page: number;
+  pageSize: number;
+  totalRows: number;
+  summary: Record<string, number>;
+  byFulfillment: Array<{ key: string; orders: number; amountCents: number }>;
+  byPayment: Array<{ key: string; amountCents: number }>;
+  byProduct: Array<{ key: string; quantity: number; amountCents: number }>;
+  rows: Array<{
+    occurredAt: string;
+    kind: string;
+    id: string;
+    description: string;
+    amountCents: number;
+    costCents: number;
+    method: string;
+  }>;
+};
+const reportLabels: Record<string, string> = {
+  deliveredOrders: 'Pedidos entregados',
+  grossSalesCents: 'Ventas entregadas',
+  refundsCents: 'Devoluciones',
+  netSalesCents: 'Ventas netas',
+  costOfGoodsSoldCents: 'Costo vendido',
+  grossProfitCents: 'Utilidad bruta',
+  commissionsCents: 'Comisiones',
+  operatingExpensesCents: 'Gastos operativos',
+  wasteCents: 'Mermas',
+  operatingResultCents: 'Resultado operativo',
+  cashCollectedCents: 'Efectivo cobrado',
+  cashRefundedCents: 'Efectivo devuelto',
+  cashFlowInCents: 'Entradas de caja',
+  cashFlowOutCents: 'Salidas de caja',
+  pendingCostCents: 'Costo pendiente de clasificar',
+  unvaluedDeliveredOrders: 'Pedidos sin costo histórico',
+};
+function ProfitabilityView({ enabled }: { enabled: boolean }) {
+  const [from, setFrom] = useState(localDate(6));
+  const [to, setTo] = useState(localDate());
+  const [page, setPage] = useState(1);
+  const [report, setReport] = useState<Profitability | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  async function load(nextPage = 1) {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await request<Profitability>(
+        `/api/v1/admin/reports/profitability?${new URLSearchParams({ from, to, page: String(nextPage), pageSize: '50' })}`,
+      );
+      setReport(result);
+      setPage(nextPage);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo cargar el reporte.');
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (enabled) void load();
+  }, [enabled]);
+  const csvUrl = `/api/v1/admin/reports/profitability.csv?${new URLSearchParams({ from, to })}`;
+  return (
+    <div className="settings-grid">
+      <section className="admin-card">
+        <p className="eyebrow">Rentabilidad · America/Mexico_City</p>
+        <h2>Periodo del reporte</h2>
+        <div className="form-row">
+          <label>
+            Desde
+            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </label>
+          <label>
+            Hasta
+            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </label>
+          <button onClick={() => void load()}>Consultar</button>
+          {report && (
+            <a className="button secondary" href={csvUrl}>
+              Descargar CSV completo
+            </a>
+          )}
+        </div>
+        {!enabled && (
+          <p role="alert">
+            Los reportes de rentabilidad están deshabilitados hasta activar la capacidad en el
+            servidor.
+          </p>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        {loading && <p>Cargando corte consistente…</p>}
+      </section>
+      {report && (
+        <>
+          <section className="stats">
+            {Object.entries(report.summary).map(([key, value]) => (
+              <article key={key}>
+                <span>{reportLabels[key] ?? key}</span>
+                <strong>{key === 'deliveredOrders' ? value : formatMoney(value)}</strong>
+              </article>
+            ))}
+          </section>
+          <section className="admin-card">
+            <h2>Detalle del periodo</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Descripción</th>
+                    <th>Medio</th>
+                    <th>Importe</th>
+                    <th>Costo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.rows.map((row) => (
+                    <tr key={`${row.kind}-${row.id}`}>
+                      <td>{formatDate(row.occurredAt)}</td>
+                      <td>{row.kind}</td>
+                      <td>
+                        {row.description}
+                        <br />
+                        <small>{row.id}</small>
+                      </td>
+                      <td>{row.method || '—'}</td>
+                      <td>{formatMoney(row.amountCents)}</td>
+                      <td>{formatMoney(row.costCents)}</td>
+                    </tr>
+                  ))}
+                  {!report.rows.length && (
+                    <tr>
+                      <td colSpan={6}>No hay movimientos en este periodo.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="form-row">
+              <span>{report.totalRows} movimientos en el corte</span>
+              <button
+                className="secondary"
+                disabled={page <= 1}
+                onClick={() => void load(page - 1)}
+              >
+                Anterior
+              </button>
+              <span>Página {page}</span>
+              <button
+                className="secondary"
+                disabled={page * report.pageSize >= report.totalRows}
+                onClick={() => void load(page + 1)}
+              >
+                Siguiente
+              </button>
+            </div>
+          </section>
+          <section className="admin-card">
+            <h2>Por modalidad y pago</h2>
+            <div className="row-list">
+              {report.byFulfillment.map((row) => (
+                <p key={row.key}>
+                  {row.key}: {row.orders} pedidos · {formatMoney(row.amountCents)}
+                </p>
+              ))}
+              {report.byPayment.map((row) => (
+                <p key={row.key}>
+                  {row.key}: {formatMoney(row.amountCents)}
+                </p>
+              ))}
+            </div>
+          </section>
+          <section className="admin-card">
+            <h2>Por producto</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Unidades</th>
+                    <th>Importe de partidas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.byProduct.map((row) => (
+                    <tr key={row.key}>
+                      <td>{row.key}</td>
+                      <td>{row.quantity}</td>
+                      <td>{formatMoney(row.amountCents)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+const capabilityLabels: Record<string, string> = {
+  stock_ledger: 'Libro de inventario',
+  purchasing: 'Compras y proveedores',
+  recipe_versions: 'Recetas versionadas',
+  production: 'Producción por lotes',
+  unified_orders: 'Comandas unificadas',
+  cash_sessions: 'Caja y turnos',
+  payments_refunds: 'Pagos y devoluciones',
+  pos_tickets: 'Tickets',
+  expenses: 'Gastos',
+  profitability_reports: 'Reportes de rentabilidad',
+  pos_cutover: 'Corte irreversible del POS anterior',
+};
+
+function PosActivationView({
+  csrf,
+  onChanged,
+}: {
+  csrf: string;
+  onChanged(key: string, enabled: boolean): void;
+}) {
+  const [data, setData] = useState<{
+    capabilities: Array<{ key: string; enabled: boolean; updatedAt: string }>;
+    legacyPendingOrders: number;
+  }>();
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  async function load() {
+    setData(await request('/api/v1/admin/pos/capabilities'));
+  }
+  useEffect(() => {
+    void load().catch((cause) =>
+      setError(cause instanceof Error ? cause.message : 'No se pudo consultar el estado.'),
+    );
+  }, []);
+  async function setEnabled(key: string, enabled: boolean) {
+    if (note.trim().length < 8) {
+      setError('Escribe una nota de al menos 8 caracteres.');
+      return;
+    }
+    setBusy(key);
+    setError('');
+    try {
+      await request(`/api/v1/admin/pos/capabilities/${key}`, {
+        method: 'PUT',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          idempotencyKey: crypto.randomUUID(),
+          enabled,
+          activationNote: note.trim(),
+        }),
+      });
+      await load();
+      onChanged(key, enabled);
+      setNote('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo cambiar la activación.');
+    } finally {
+      setBusy('');
+    }
+  }
+  return (
+    <div className="row-list">
+      <section className="admin-card">
+        <p className="eyebrow">Control de despliegue</p>
+        <h2>Activación por etapas</h2>
+        <p>
+          Código integrado, función habilitada y versión desplegada son pasos distintos. Cada cambio
+          queda ligado a tu sesión y a una nota de operación.
+        </p>
+        <p>
+          Comandas antiguas pendientes: <strong>{data?.legacyPendingOrders ?? '—'}</strong>
+        </p>
+        <label>
+          Nota del cambio
+          <input
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Conciliación, fecha y responsable"
+          />
+        </label>
+        {error ? (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </section>
+      {data?.capabilities.map((capability) => (
+        <section className="admin-card section-heading" key={capability.key}>
+          <div>
+            <p className="eyebrow">{capability.enabled ? 'Habilitada' : 'Deshabilitada'}</p>
+            <h2>{capabilityLabels[capability.key] ?? capability.key}</h2>
+            <small>{formatDate(capability.updatedAt)}</small>
+          </div>
+          <button
+            className={capability.enabled ? 'secondary' : 'primary'}
+            disabled={
+              busy === capability.key || (capability.key === 'pos_cutover' && capability.enabled)
+            }
+            onClick={() => void setEnabled(capability.key, !capability.enabled)}
+          >
+            {busy === capability.key
+              ? 'Guardando…'
+              : capability.enabled
+                ? 'Deshabilitar'
+                : 'Habilitar'}
+          </button>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -1744,22 +3308,30 @@ export default function App() {
   const [purchasing, setPurchasing] = useState<Purchasing | null>(null);
   const [recipeVersions, setRecipeVersions] = useState<RecipeVersions | null>(null);
   const [orders, setOrders] = useState<Order[] | null>(null);
+  const [featureCaps, setFeatureCaps] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   async function load(showNotice = false) {
-    const [data, ledger, purchasingData, recipeVersionsData, ordersData] = await Promise.all([
-      request<Dashboard>('/api/v1/admin/dashboard'),
-      request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
-      request<Purchasing>('/api/v1/admin/purchasing'),
-      request<RecipeVersions>('/api/v1/admin/recipes/versions'),
-      request<{ orders: Order[] }>('/api/v1/admin/orders'),
-    ]);
+    const [data, ledger, purchasingData, recipeVersionsData, ordersData, capabilityData] =
+      await Promise.all([
+        request<Dashboard>('/api/v1/admin/dashboard'),
+        request<StockLedgerState>('/api/v1/admin/inventory/ledger'),
+        request<Purchasing>('/api/v1/admin/purchasing'),
+        request<RecipeVersions>('/api/v1/admin/recipes/versions'),
+        request<{ orders: Order[] }>('/api/v1/admin/orders'),
+        request<{ capabilities: Array<{ key: string; enabled: boolean }> }>(
+          '/api/v1/admin/pos/capabilities',
+        ),
+      ]);
     setDashboard(data);
     setInventoryLedger(ledger);
     setPurchasing(purchasingData);
     setRecipeVersions(recipeVersionsData);
     setOrders(ordersData.orders);
+    setFeatureCaps(
+      Object.fromEntries(capabilityData.capabilities.map((item) => [item.key, item.enabled])),
+    );
     if (showNotice) {
       setNotice('Cambios guardados. La web pública se actualizará automáticamente.');
       window.setTimeout(() => setNotice(''), 4000);
@@ -1774,6 +3346,17 @@ export default function App() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => {
+    if (!csrf) return;
+    const stream = new EventSource('/api/v1/admin/orders/stream', { withCredentials: true });
+    const refreshOrders = () => {
+      void request<{ orders: Order[] }>('/api/v1/admin/orders')
+        .then((result) => setOrders(result.orders))
+        .catch(() => {});
+    };
+    stream.addEventListener('order', refreshOrders);
+    return () => stream.close();
+  }, [csrf]);
   async function logout() {
     await request('/api/v1/admin/session', { method: 'DELETE' });
     setCsrf('');
@@ -1951,7 +3534,40 @@ export default function App() {
           />
         )}
         {tab === 'purchasing' && <PurchasingView data={purchasing} />}
-        {tab === 'orders' && <OrdersView orders={orders} csrf={csrf} onSaved={() => void load()} />}
+        {tab === 'orders' && (
+          <OrdersView
+            orders={orders}
+            csrf={csrf}
+            capabilities={featureCaps}
+            onSaved={() => void load()}
+          />
+        )}
+        {tab === 'pos' && (
+          <AdminPos
+            csrf={csrf}
+            enabled={featureCaps.unified_orders === true}
+            onCreated={() => void load()}
+          />
+        )}
+        {tab === 'expenses' && (
+          <ExpensesView
+            csrf={csrf}
+            enabled={featureCaps.expenses === true}
+            onSaved={() => void load()}
+          />
+        )}
+        {tab === 'cash' && <CashView csrf={csrf} enabled={featureCaps.cash_sessions === true} />}
+        {tab === 'activation' && (
+          <PosActivationView
+            csrf={csrf}
+            onChanged={(key, enabled) =>
+              setFeatureCaps((current) => ({ ...current, [key]: enabled }))
+            }
+          />
+        )}
+        {tab === 'reports' && (
+          <ProfitabilityView enabled={featureCaps.profitability_reports === true} />
+        )}
         {tab === 'roulette' && (
           <Roulette
             prizes={dashboard.prizes}

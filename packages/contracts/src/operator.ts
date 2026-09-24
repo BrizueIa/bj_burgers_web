@@ -109,6 +109,8 @@ export const orderSchema = z.object({
   subtotalCents: z.number().int().nonnegative(),
   deliveryCents: z.number().int().nonnegative(),
   totalCents: z.number().int().nonnegative(),
+  manualDiscountCents: z.number().int().nonnegative(),
+  manualDiscountReason: z.string(),
   paidCents: z.number().int().nonnegative(),
   refundedCents: z.number().int().nonnegative(),
   balanceCents: z.number().int().nonnegative(),

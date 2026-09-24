@@ -43,9 +43,30 @@ export async function createPurchase(sql: Sql, input: PurchaseCreate, actor: Aut
         throw new PosFoundationError(400, 'El descuento no puede superar el subtotal.');
       const discounts = allocations(input.discountCents, gross),
         acquisition = allocations(input.acquisitionCents, gross);
+      const totalCents = subtotal - input.discountCents + input.acquisitionCents;
+      let cashSessionId: string | null = null;
+      if (input.fundsOrigin === 'cash_session') {
+        const [session] = await tx<
+          { id: string; expected_cents: number }[]
+        >`select id,expected_cents from cash_sessions where status='open' for update`;
+        if (!session)
+          throw new PosFoundationError(
+            409,
+            'Abre un turno de caja para registrar la compra desde caja.',
+          );
+        cashSessionId = session.id;
+        if (input.paymentMethod === 'cash') {
+          if (session.expected_cents < totalCents)
+            throw new PosFoundationError(409, 'El efectivo esperado no alcanza para esta compra.');
+          const expected = session.expected_cents - totalCents;
+          const ids = actorIds(actor);
+          await tx`update cash_sessions set expected_cents=${expected} where id=${session.id}`;
+          await tx`insert into cash_movements(cash_session_id,idempotency_key,kind,amount_cents,reason,created_by_device_id,created_by_user_id) values(${session.id},gen_random_uuid(),'expense',${-totalCents},${`Compra ${input.reference || 'sin folio'}`},${ids.device},${ids.user})`;
+        }
+      }
       const [document] =
-        await tx`insert into purchase_documents(supplier_id,idempotency_key,reference,status,subtotal_cents,discount_cents,acquisition_cents,total_cents,payment_method,funds_origin,created_by_device_id,created_by_user_id)
-      values(${input.supplierId},${input.idempotencyKey},${input.reference},'confirmed',${subtotal},${input.discountCents},${input.acquisitionCents},${subtotal - input.discountCents + input.acquisitionCents},${input.paymentMethod},${input.fundsOrigin},${ids.device},${ids.user}) returning id,total_cents`;
+        await tx`insert into purchase_documents(supplier_id,idempotency_key,reference,status,subtotal_cents,discount_cents,acquisition_cents,total_cents,payment_method,funds_origin,cash_session_id,created_by_device_id,created_by_user_id)
+      values(${input.supplierId},${input.idempotencyKey},${input.reference},'confirmed',${subtotal},${input.discountCents},${input.acquisitionCents},${totalCents},${input.paymentMethod},${input.fundsOrigin},${cashSessionId},${ids.device},${ids.user}) returning id,total_cents`;
       if (!document) throw new PosFoundationError(500, 'No fue posible registrar la compra.');
       const snapshots: Array<Record<string, string | number>> = [];
       for (const [index, line] of input.lines.entries()) {

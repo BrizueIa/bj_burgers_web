@@ -355,6 +355,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [minimum, setMinimum] = useState('0');
   const [payment, setPayment] = useState<'cash' | 'card' | 'transfer'>('cash');
   const [fulfillment, setFulfillment] = useState<'counter' | 'pickup' | 'delivery'>('counter');
+  const [manualDiscount, setManualDiscount] = useState('');
+  const [manualDiscountReason, setManualDiscountReason] = useState('');
   const [neighborhood, setNeighborhood] = useState('');
   const [streetAndNumber, setStreetAndNumber] = useState('');
   const [selectedId, setSelectedId] = useState('');
@@ -550,6 +552,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         customerName: description.trim(),
         neighborhood: fulfillment === 'delivery' ? neighborhood.trim() : '',
         streetAndNumber: fulfillment === 'delivery' ? streetAndNumber.trim() : '',
+        manualDiscountCents: centsFromInput(manualDiscount),
+        manualDiscountReason: manualDiscountReason.trim(),
         items: lines.map((line) => ({
           productId: line.id,
           quantity: line.quantity,
@@ -623,6 +627,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       await client.invalidateQueries({ queryKey: ['business'] });
       router.back();
     } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) setPending(undefined);
       setMessage(
         cause instanceof BjApiError
           ? cause.message
@@ -698,7 +703,6 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           value={description}
           onChangeText={(value) => {
             setDescription(value);
-            if (mode === 'sale') setPending(undefined);
           }}
         />
       ) : null}
@@ -740,7 +744,6 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 selected={fulfillment === value}
                 onPress={() => {
                   setFulfillment(value);
-                  setPending(undefined);
                 }}
               />
             ))}
@@ -752,7 +755,6 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 value={neighborhood}
                 onChangeText={(value) => {
                   setNeighborhood(value);
-                  setPending(undefined);
                 }}
               />
               <Field
@@ -760,11 +762,25 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 value={streetAndNumber}
                 onChangeText={(value) => {
                   setStreetAndNumber(value);
-                  setPending(undefined);
                 }}
               />
             </>
           ) : null}
+          <Field
+            label="Descuento manual (MXN)"
+            keyboardType="decimal-pad"
+            value={manualDiscount}
+            onChangeText={(value) => {
+              setManualDiscount(value);
+            }}
+          />
+          <Field
+            label="Motivo del descuento"
+            value={manualDiscountReason}
+            onChangeText={(value) => {
+              setManualDiscountReason(value);
+            }}
+          />
         </>
       ) : null}
       {mode === 'recipe' ? (
@@ -882,7 +898,6 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 disabled={mode === 'sale' && Boolean(pending)}
                 onPress={() => {
                   setLines((current) => current.filter((item) => item.id !== line.id));
-                  setPending(undefined);
                 }}
               />
             </View>

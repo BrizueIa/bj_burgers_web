@@ -13,3 +13,5 @@ export * from './unified-orders.js';
 export * from './cash-sessions.js';
 export * from './payments.js';
 export * from './pos-tickets.js';
+export * from './expenses.js';
+export * from './profitability.js';

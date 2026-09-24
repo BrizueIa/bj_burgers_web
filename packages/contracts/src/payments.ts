@@ -15,11 +15,14 @@ export const orderPaymentCreateSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
   payments: z.array(paymentLine).min(1).max(5),
 });
+export const counterCheckoutSchema = orderPaymentCreateSchema;
 export const orderRefundCreateSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
   paymentId: z.uuid(),
+  orderItemId: z.uuid().optional(),
   amountCents: positiveMoneyCentsSchema,
   reason: z.string().trim().min(3).max(300),
 });
 export type OrderPaymentCreate = z.infer<typeof orderPaymentCreateSchema>;
+export type CounterCheckout = z.infer<typeof counterCheckoutSchema>;
 export type OrderRefundCreate = z.infer<typeof orderRefundCreateSchema>;

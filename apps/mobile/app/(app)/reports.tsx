@@ -1,4 +1,4 @@
-import { BusinessPage } from '@/src/business';
+import { ProfitabilityPage } from '@/src/profitability';
 export default function ReportsScreen() {
-  return <BusinessPage section="reports" />;
+  return <ProfitabilityPage />;
 }
