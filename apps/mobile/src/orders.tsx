@@ -6,7 +6,14 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Share, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
-import type { Catalog, Order, OrderDraft, OrderStatus, OrderTicket } from '@bj/contracts';
+import type {
+  Catalog,
+  Order,
+  OrderDraft,
+  OrderStatus,
+  OrderTicket,
+  UnifiedOrderConfirm,
+} from '@bj/contracts';
 import { api } from './api';
 import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
@@ -230,7 +237,12 @@ export function OrdersBoard() {
         )}
       </View>
       <View style={styles.floating}>
-        <Button label="Importar pedido" onPress={() => router.push('/(app)/orders/import')} />
+        <Button label="Nueva comanda" onPress={() => router.push('/(app)/pos')} />
+        <Button
+          label="Importar de WhatsApp"
+          secondary
+          onPress={() => router.push('/(app)/orders/import')}
+        />
       </View>
     </View>
   );
@@ -833,13 +845,19 @@ function DraftItemEditor({
 
 export function OrderImport() {
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: () => api.catalog() });
+  const capabilities = useQuery({
+    queryKey: ['pos-capabilities'],
+    queryFn: () => api.capabilities(),
+  });
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<OrderDraft>(emptyDraft);
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  const pending = useRef<Parameters<typeof api.createOrder>[0] | undefined>(undefined);
+  const [quotedTotal, setQuotedTotal] = useState<number | undefined>();
+  const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
   useEffect(() => {
     pending.current = undefined;
+    setQuotedTotal(undefined);
   }, [draft]);
   const parse = async () => {
     setError(undefined);
@@ -871,39 +889,62 @@ export function OrderImport() {
       items: current.items.map((item, itemIndex) => (itemIndex === index ? next : item)),
     }));
   const create = async () => {
-    if (!draft.customerName.trim() || !draft.items.length) {
-      setError('Agrega el nombre del cliente y por lo menos un producto.');
+    const unifiedOrdersEnabled =
+      capabilities.data?.some(
+        (capability) => capability.key === 'unified_orders' && capability.enabled,
+      ) === true;
+    if (!unifiedOrdersEnabled) {
+      setError(
+        'El servidor conectado todavía no habilita el POS unificado. Actualiza la API para confirmar comandas.',
+      );
+      return;
+    }
+    if (!draft.items.length) {
+      setError('Agrega por lo menos un producto.');
       return;
     }
     if (draft.items.some((item) => item.combo && !item.drinkProductId)) {
       setError('Selecciona una bebida para cada combo.');
       return;
     }
-    pending.current ??= {
-      rawMessage: draft.rawMessage,
-      customerName: draft.customerName,
-      neighborhood: draft.neighborhood,
-      streetAndNumber: draft.streetAndNumber,
-      references: draft.references,
-      deliveryNotes: draft.deliveryNotes,
-      items: draft.items.map((item) => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        removedIngredients: item.removedIngredients,
-        modifierIds: item.modifierIds,
-        combo: item.combo,
-        ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
-        note: item.note,
-      })),
-      idempotencyKey: createIdempotencyKey(),
-    };
     setBusy(true);
     setError(undefined);
     try {
-      await api.createOrder(pending.current);
+      if (!pending.current) {
+        const request = {
+          fulfillment: 'counter' as const,
+          customerName: '',
+          neighborhood: '',
+          streetAndNumber: '',
+          manualDiscountCents: 0,
+          manualDiscountReason: '',
+          source: 'manual_whatsapp' as const,
+          rawMessage: draft.rawMessage,
+          items: draft.items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            removedIngredients: item.removedIngredients,
+            modifierIds: item.modifierIds,
+            combo: item.combo,
+            ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+            note: item.note,
+          })),
+        };
+        const quote = await api.quoteUnifiedOrder(request);
+        setQuotedTotal(quote.totalCents);
+        pending.current = {
+          ...request,
+          quotedTotalCents: quote.totalCents,
+          idempotencyKey: createIdempotencyKey(),
+        };
+        setError(undefined);
+        return;
+      }
+      const order = await api.confirmUnifiedOrder(pending.current);
       await queryClient.invalidateQueries({ queryKey: ['orders'] });
-      router.back();
+      router.replace({ pathname: '/(app)/orders/[id]', params: { id: order.id } });
     } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) pending.current = undefined;
       setError(
         cause instanceof BjApiError
           ? cause.message
@@ -922,7 +963,7 @@ export function OrderImport() {
     );
   return (
     <ScrollScreen>
-      <SectionTitle title="Importar pedido" />
+      <SectionTitle title="Importar de WhatsApp" />
       <Text style={shared.subtitle}>
         Pega el mensaje que llegó por WhatsApp, revisa el resultado y confirma la comanda.
       </Text>
@@ -944,34 +985,9 @@ export function OrderImport() {
       {draft.unresolvedLines.length ? (
         <Notice kind="warning">No se reconocieron: {draft.unresolvedLines.join(' · ')}</Notice>
       ) : null}
-      <Field
-        label="Nombre del cliente"
-        value={draft.customerName}
-        onChangeText={(customerName) => {
-          pending.current = undefined;
-          setDraft((current) => ({ ...current, customerName }));
-        }}
-      />
-      <Field
-        label="Colonia"
-        value={draft.neighborhood}
-        onChangeText={(neighborhood) => setDraft((current) => ({ ...current, neighborhood }))}
-      />
-      <Field
-        label="Dirección"
-        value={draft.streetAndNumber}
-        onChangeText={(streetAndNumber) => setDraft((current) => ({ ...current, streetAndNumber }))}
-      />
-      <Field
-        label="Referencias"
-        value={draft.references}
-        onChangeText={(references) => setDraft((current) => ({ ...current, references }))}
-      />
-      <Field
-        label="Indicaciones"
-        value={draft.deliveryNotes}
-        onChangeText={(deliveryNotes) => setDraft((current) => ({ ...current, deliveryNotes }))}
-      />
+      <Notice>
+        La comanda importada se registra para mostrador. No requiere datos de cliente ni domicilio.
+      </Notice>
       <Text style={shared.label}>Agregar producto</Text>
       <ScrollView horizontal contentContainerStyle={styles.row}>
         {catalog.data.products
@@ -1000,15 +1016,204 @@ export function OrderImport() {
         />
       ))}
       {error ? <Notice kind="error">{error}</Notice> : null}
+      {quotedTotal !== undefined ? (
+        <>
+          <Text style={styles.total}>Total cotizado: {money(quotedTotal)}</Text>
+          <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
+        </>
+      ) : null}
       {pending.current && !busy ? (
         <Notice kind="warning">La respuesta no se confirmó. Reintenta esta misma comanda.</Notice>
       ) : null}
       <Button
-        label={
-          busy ? 'Confirmando…' : pending.current ? 'Reintentar confirmación' : 'Confirmar comanda'
-        }
-        disabled={busy}
+        label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
+        disabled={busy || draft.items.length === 0}
         onPress={() => void create()}
+      />
+    </ScrollScreen>
+  );
+}
+
+/** POS de mostrador: arma una comanda directamente desde el catálogo. */
+export function OrderBuilder() {
+  const catalog = useQuery({ queryKey: ['catalog'], queryFn: () => api.catalog() });
+  const capabilities = useQuery({
+    queryKey: ['pos-capabilities'],
+    queryFn: () => api.capabilities(),
+  });
+  const queryClient = useQueryClient();
+  const [items, setItems] = useState<DraftItem[]>([]);
+  const [quote, setQuote] = useState<number | undefined>();
+  const [message, setMessage] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
+  const enabled =
+    capabilities.data?.some(
+      (capability) => capability.key === 'unified_orders' && capability.enabled,
+    ) === true;
+
+  const updateItem = (index: number, next: DraftItem) => {
+    pending.current = undefined;
+    setQuote(undefined);
+    setItems((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)));
+  };
+  const addProduct = (product: Catalog['products'][number]) => {
+    pending.current = undefined;
+    setQuote(undefined);
+    setItems((current) => [
+      ...current,
+      {
+        productId: product.id,
+        productName: product.name,
+        quantity: 1,
+        removedIngredients: [],
+        modifierIds: [],
+        combo: false,
+        note: '',
+      },
+    ]);
+  };
+  const request = (): Omit<UnifiedOrderConfirm, 'quotedTotalCents' | 'idempotencyKey'> => ({
+    fulfillment: 'counter',
+    customerName: '',
+    neighborhood: '',
+    streetAndNumber: '',
+    manualDiscountCents: 0,
+    manualDiscountReason: '',
+    source: 'pos',
+    items: items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      removedIngredients: item.removedIngredients,
+      modifierIds: item.modifierIds,
+      combo: item.combo,
+      ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+      note: item.note,
+    })),
+  });
+  const submit = async () => {
+    if (!enabled) {
+      setMessage(
+        'El servidor conectado todavía no habilita el POS. Actualiza la API para crear comandas.',
+      );
+      return;
+    }
+    if (!items.length) {
+      setMessage('Agrega al menos un producto.');
+      return;
+    }
+    if (items.some((item) => item.combo && !item.drinkProductId)) {
+      setMessage('Selecciona una bebida para cada combo.');
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      if (!pending.current) {
+        const currentRequest = request();
+        const serverQuote = await api.quoteUnifiedOrder(currentRequest);
+        setQuote(serverQuote.totalCents);
+        pending.current = {
+          ...currentRequest,
+          quotedTotalCents: serverQuote.totalCents,
+          idempotencyKey: createIdempotencyKey(),
+        };
+        return;
+      }
+      const order = await api.confirmUnifiedOrder(pending.current);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['business'] }),
+      ]);
+      router.replace({ pathname: '/(app)/orders/[id]', params: { id: order.id } });
+    } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) pending.current = undefined;
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo confirmar. Reintenta esta misma comanda para evitar duplicarla.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (catalog.isLoading || capabilities.isLoading) return <Loading label="Cargando POS…" />;
+  if (!catalog.data)
+    return (
+      <ScrollScreen>
+        <SectionTitle title="POS" />
+        <Notice kind="error">
+          {catalog.error instanceof BjApiError
+            ? catalog.error.message
+            : 'No se pudo cargar el catálogo. Comprueba la conexión con la API.'}
+        </Notice>
+        <Button label="Reintentar" onPress={() => void catalog.refetch()} />
+      </ScrollScreen>
+    );
+
+  return (
+    <ScrollScreen>
+      <SectionTitle title="Nueva comanda" />
+      <Text style={shared.subtitle}>
+        Elige productos, personaliza ingredientes y extras, y confirma.
+      </Text>
+      {capabilities.error ? (
+        <Notice kind="warning">
+          La API conectada no publica las capacidades del POS. Puedes preparar el pedido, pero el
+          servidor debe actualizarse para cotizarlo y confirmarlo.
+        </Notice>
+      ) : !enabled ? (
+        <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
+      ) : null}
+      <Text style={shared.label}>Agregar producto</Text>
+      <View style={styles.row}>
+        {catalog.data.products
+          .filter((product) => product.available)
+          .map((product) => (
+            <Pill
+              key={product.id}
+              label={`${product.name} ${money(product.priceCents)}`}
+              selected={false}
+              onPress={() => addProduct(product)}
+            />
+          ))}
+      </View>
+      {items.map((item, index) => (
+        <DraftItemEditor
+          key={`${item.productId}-${index}`}
+          item={item}
+          catalog={catalog.data!}
+          onChange={(next) => updateItem(index, next)}
+          onRemove={() => {
+            pending.current = undefined;
+            setQuote(undefined);
+            setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
+          }}
+        />
+      ))}
+      {quote !== undefined ? (
+        <>
+          <Text style={styles.total}>Total cotizado: {money(quote)}</Text>
+          <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
+        </>
+      ) : null}
+      {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
+      {pending.current && !busy ? (
+        <Notice kind="warning">
+          La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
+          solicitud.
+        </Notice>
+      ) : null}
+      <Button
+        label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
+        disabled={busy || !enabled || items.length === 0}
+        onPress={() => void submit()}
+      />
+      <Button
+        label="Importar pedido de WhatsApp"
+        secondary
+        onPress={() => router.push('/(app)/orders/import')}
       />
     </ScrollScreen>
   );
