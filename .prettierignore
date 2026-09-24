@@ -1,2 +1,4 @@
 # Archivo generado por pnpm; CI comprueba su integridad con --frozen-lockfile.
 pnpm-lock.yaml
+**/.expo/
+**/expo-env.d.ts
