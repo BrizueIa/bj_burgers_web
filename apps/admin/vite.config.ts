@@ -5,6 +5,6 @@ export default defineConfig({
   base: '/admin/',
   plugins: [react()],
   server: {
-    proxy: { '/api': 'http://localhost:4100' },
+    proxy: { '/api': 'http://127.0.0.1:4100' },
   },
 });

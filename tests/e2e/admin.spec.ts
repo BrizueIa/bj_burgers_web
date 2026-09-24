@@ -19,6 +19,7 @@ test('la administración presenta POS, caja y reportes desde el mismo panel', as
   await page.getByLabel('Correo').fill(process.env.ADMIN_EMAIL ?? '');
   await page.getByLabel('Contraseña').fill(process.env.ADMIN_PASSWORD ?? '');
   await page.getByRole('button', { name: 'Entrar' }).click();
+  await expect(page.getByRole('heading', { name: 'Resumen' })).toBeVisible();
   await page.getByRole('button', { name: 'Vender' }).click();
   await expect(page.getByRole('heading', { name: 'Nueva venta' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('habilitada');
