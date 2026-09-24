@@ -42,6 +42,7 @@ export const orderCreateRequestSchema = z.object({
 export const orderStatusUpdateSchema = z.object({
   status: orderStatusSchema,
   note: z.string().trim().max(500).default(''),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export const spinCodeIssueRequestSchema = z.object({ idempotencyKey: z.uuid() });
@@ -84,9 +85,19 @@ export const orderEventSchema = z.object({
   note: z.string(),
   createdAt: z.string().datetime({ offset: true }),
 });
+export const orderPaymentSummarySchema = z.object({
+  id: z.uuid(),
+  method: z.enum(['cash', 'card', 'transfer']),
+  receivedCents: z.number().int().positive(),
+  appliedCents: z.number().int().positive(),
+  changeCents: z.number().int().nonnegative(),
+  refundedCents: z.number().int().nonnegative(),
+  refundableCents: z.number().int().nonnegative(),
+});
 export const orderSchema = z.object({
   id: z.uuid(),
   source: z.string(),
+  fulfillment: z.enum(['counter', 'pickup', 'delivery']),
   status: orderStatusSchema,
   customerName: z.string(),
   neighborhood: z.string(),
@@ -98,9 +109,19 @@ export const orderSchema = z.object({
   subtotalCents: z.number().int().nonnegative(),
   deliveryCents: z.number().int().nonnegative(),
   totalCents: z.number().int().nonnegative(),
+  manualDiscountCents: z.number().int().nonnegative(),
+  manualDiscountReason: z.string(),
+  paidCents: z.number().int().nonnegative(),
+  refundedCents: z.number().int().nonnegative(),
+  balanceCents: z.number().int().nonnegative(),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
+  quotedAt: z.string().datetime({ offset: true }).nullable(),
+  preparingAt: z.string().datetime({ offset: true }).nullable(),
+  deliveredAt: z.string().datetime({ offset: true }).nullable(),
+  cancelledAt: z.string().datetime({ offset: true }).nullable(),
   spinCodeIssued: z.boolean(),
+  payments: z.array(orderPaymentSummarySchema),
   items: z.array(orderItemSchema),
   events: z.array(orderEventSchema),
 });

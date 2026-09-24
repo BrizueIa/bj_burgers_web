@@ -1,8 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const adminAuthFile = 'playwright/.auth/admin.json';
+
 export default defineConfig({
   testDir: './tests/e2e',
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
@@ -12,9 +14,25 @@ export default defineConfig({
     reducedMotion: 'reduce',
   },
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile', use: { ...devices['Pixel 5'] } },
-    { name: 'tablet', use: { ...devices['iPad (gen 7)'], browserName: 'chromium' } },
+    { name: 'setup', testMatch: /.*\.setup\.ts/ },
+    {
+      name: 'desktop',
+      dependencies: ['setup'],
+      testIgnore: /.*\.setup\.ts/,
+      use: { ...devices['Desktop Chrome'], storageState: adminAuthFile },
+    },
+    {
+      name: 'mobile',
+      dependencies: ['setup'],
+      testIgnore: /.*\.setup\.ts/,
+      use: { ...devices['Pixel 5'], storageState: adminAuthFile },
+    },
+    {
+      name: 'tablet',
+      dependencies: ['setup'],
+      testIgnore: /.*\.setup\.ts/,
+      use: { ...devices['iPad (gen 7)'], browserName: 'chromium', storageState: adminAuthFile },
+    },
   ],
   webServer: [
     {

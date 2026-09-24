@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { Share, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
-import type { Catalog, Order, OrderDraft, OrderStatus } from '@bj/contracts';
+import type { Catalog, Order, OrderDraft, OrderStatus, OrderTicket } from '@bj/contracts';
 import { api } from './api';
-import { money, statusLabel } from './format';
+import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
@@ -47,10 +49,16 @@ function useOrderStream(enabled: boolean) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const connect = async () => {
       try {
-        await api.subscribeOrderEvents((orderId) => {
-          void queryClient.invalidateQueries({ queryKey: ['orders'] });
-          void queryClient.invalidateQueries({ queryKey: ['order', orderId] });
-        }, controller.signal);
+        await api.subscribeOrderEvents(
+          (orderId) => {
+            void queryClient.invalidateQueries({ queryKey: ['orders'] });
+            void queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+          },
+          controller.signal,
+          () => {
+            void queryClient.invalidateQueries({ queryKey: ['orders'] });
+          },
+        );
         retry = 1_000;
       } catch (cause) {
         if (cause instanceof BjApiError && cause.unauthorized) return;
@@ -80,6 +88,37 @@ function StatusPill({ status }: { status: string }) {
       <Text style={styles.statusText}>{statusLabel(status)}</Text>
     </View>
   );
+}
+
+function htmlEscape(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character]!,
+  );
+}
+
+function ticketHtml(ticket: OrderTicket) {
+  const { order } = ticket;
+  const items = order.items
+    .map(
+      (item) =>
+        `<tr><td>${item.quantity} × ${htmlEscape(item.productName)}${item.note ? `<br><small>${htmlEscape(item.note)}</small>` : ''}</td><td>${money(item.lineTotalCents)}</td></tr>`,
+    )
+    .join('');
+  const payments = ticket.payments
+    .map(
+      (payment) =>
+        `<li>${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]}: ${money(payment.appliedCents)}</li>`,
+    )
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px Arial,sans-serif;color:#181818;padding:24px}h1{text-align:center;font-size:22px}p{text-align:center;color:#555}table{width:100%;border-collapse:collapse;margin:20px 0}td{padding:9px 0;border-bottom:1px solid #ddd}td:last-child{text-align:right;white-space:nowrap}.total{font-weight:bold;font-size:18px;text-align:right}small{color:#555}</style></head><body><h1>B&amp;J Burgers</h1><p>Ticket ${htmlEscape(ticket.id.slice(0, 8).toUpperCase())}<br>${new Date(ticket.issuedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p><p>${htmlEscape(order.customerName || 'Mostrador')} · ${htmlEscape(order.fulfillment)}</p><table>${items}</table>${order.manualDiscountCents > 0 ? `<p>Descuento ${money(order.manualDiscountCents)} · ${htmlEscape(order.manualDiscountReason)}</p>` : ''}<p class="total">Total ${money(order.totalCents)}</p><p>Pagos</p><ul>${payments}</ul><p>Gracias por tu compra</p></body></html>`;
 }
 
 function OrdersList({
@@ -211,17 +250,142 @@ export function OrderDetailPanel({
     error,
     refetch,
   } = useQuery({ queryKey: ['order', orderId], queryFn: () => api.order(orderId) });
+  const capabilitiesQuery = useQuery({
+    queryKey: ['pos-capabilities'],
+    queryFn: () => api.capabilities(),
+  });
+  const unifiedOrdersEnabled =
+    capabilitiesQuery.data?.some((item) => item.key === 'unified_orders' && item.enabled) === true;
+  const paymentsEnabled =
+    capabilitiesQuery.data?.some((item) => item.key === 'payments_refunds' && item.enabled) ===
+    true;
+  const ticketsEnabled =
+    capabilitiesQuery.data?.some((item) => item.key === 'pos_tickets' && item.enabled) === true;
   const [message, setMessage] = useState<string | undefined>(undefined);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
+  const [received, setReceived] = useState('');
+  const [checkoutSplitMethod, setCheckoutSplitMethod] = useState<
+    'none' | 'cash' | 'card' | 'transfer'
+  >('none');
+  const [checkoutSplitAmount, setCheckoutSplitAmount] = useState('');
+  const [refundPaymentId, setRefundPaymentId] = useState('');
+  const [refundOrderItemId, setRefundOrderItemId] = useState('');
+  const [refundAmount, setRefundAmount] = useState('');
+  const [refundReason, setRefundReason] = useState('');
+  const paymentKey = useRef<{ request: string; key: string } | undefined>(undefined);
+  const checkoutKey = useRef<{ request: string; key: string } | undefined>(undefined);
+  const refundKey = useRef<{ request: string; key: string } | undefined>(undefined);
   const spinKey = useRef<string | undefined>(undefined);
+  const ticketKey = useRef<string | undefined>(undefined);
+  const statusKey = useRef<{ status: OrderStatus; key: string } | undefined>(undefined);
   const change = useMutation({
-    mutationFn: (status: OrderStatus) => api.updateOrderStatus(orderId, status),
+    mutationFn: (status: OrderStatus) => {
+      if (statusKey.current && statusKey.current.status !== status)
+        throw new BjApiError('Reintenta primero la actualización pendiente con los mismos datos.');
+      if (!statusKey.current) statusKey.current = { status, key: createIdempotencyKey() };
+      return api.updateOrderStatus(orderId, status, '', statusKey.current.key);
+    },
     onSuccess: async () => {
+      statusKey.current = undefined;
       await queryClient.invalidateQueries({ queryKey: ['orders'] });
       await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
     },
-    onError: (cause) =>
-      setMessage(cause instanceof BjApiError ? cause.message : 'No se pudo cambiar el estado.'),
+    onError: (cause) => {
+      if (cause instanceof BjApiError && !cause.ambiguous) statusKey.current = undefined;
+      setMessage(cause instanceof BjApiError ? cause.message : 'No se pudo cambiar el estado.');
+    },
   });
+  const collectPayment = async () => {
+    setMessage(undefined);
+    const cents = centsFromInput(received);
+    const appliedCents = Math.min(cents, order?.balanceCents ?? 0);
+    const request = JSON.stringify({ orderId, paymentMethod, receivedCents: cents, appliedCents });
+    if (paymentKey.current && paymentKey.current.request !== request) {
+      setMessage('Reintenta primero el cobro pendiente con los mismos datos.');
+      return;
+    }
+    if (!paymentKey.current) paymentKey.current = { request, key: createIdempotencyKey() };
+    try {
+      const result = await api.collectOrderPayment(orderId, {
+        idempotencyKey: paymentKey.current.key,
+        payments: [
+          {
+            method: paymentMethod,
+            receivedCents: cents,
+            appliedCents,
+          },
+        ],
+      });
+      paymentKey.current = undefined;
+      setReceived('');
+      setMessage('Cobro confirmado. Saldo pendiente: ' + money(result.balanceCents));
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+    } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) paymentKey.current = undefined;
+      setMessage(cause instanceof BjApiError ? cause.message : 'No se pudo confirmar el cobro.');
+    }
+  };
+  const checkoutCounter = async () => {
+    if (!order || order.fulfillment !== 'counter' || order.status !== 'ready') return;
+    const receivedCents = centsFromInput(received);
+    const splitAppliedCents =
+      checkoutSplitMethod === 'none' ? 0 : centsFromInput(checkoutSplitAmount);
+    const primaryAppliedCents = order.balanceCents - splitAppliedCents;
+    if (
+      primaryAppliedCents <= 0 ||
+      receivedCents < primaryAppliedCents ||
+      (paymentMethod !== 'cash' && receivedCents !== primaryAppliedCents) ||
+      (checkoutSplitMethod !== 'none' && splitAppliedCents <= 0)
+    ) {
+      setMessage(
+        'Revisa los importes: los medios electrónicos deben coincidir con lo aplicado y el total debe cubrir el saldo.',
+      );
+      return;
+    }
+    const payments = [
+      { method: paymentMethod, receivedCents, appliedCents: primaryAppliedCents },
+      ...(checkoutSplitMethod === 'none'
+        ? []
+        : [
+            {
+              method: checkoutSplitMethod,
+              receivedCents: splitAppliedCents,
+              appliedCents: splitAppliedCents,
+            },
+          ]),
+    ];
+    const request = JSON.stringify({
+      orderId,
+      payments,
+    });
+    if (checkoutKey.current && checkoutKey.current.request !== request) {
+      setMessage('Reintenta primero el cobro y entrega pendiente con los mismos datos.');
+      return;
+    }
+    if (!checkoutKey.current) checkoutKey.current = { request, key: createIdempotencyKey() };
+    setMessage(undefined);
+    try {
+      const result = await api.checkoutCounterOrder(orderId, {
+        idempotencyKey: checkoutKey.current.key,
+        payments,
+      });
+      checkoutKey.current = undefined;
+      setReceived('');
+      setCheckoutSplitAmount('');
+      setCheckoutSplitMethod('none');
+      setMessage(`Cobro y entrega confirmados. Cambio: ${money(result.changeCents)}.`);
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+    } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) checkoutKey.current = undefined;
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo confirmar. Reintenta la misma solicitud.',
+      );
+    }
+  };
   const issueSpin = async () => {
     setMessage(undefined);
     spinKey.current ??= createIdempotencyKey();
@@ -243,7 +407,82 @@ export function OrderDetailPanel({
     await Clipboard.setStringAsync(code);
     await Share.share({ message: `Tu código de ruleta B&J: ${code}` });
   };
-  if (isLoading) return <Loading label="Cargando comanda…" />;
+  const shareTicket = async () => {
+    setMessage(undefined);
+    ticketKey.current ??= createIdempotencyKey();
+    try {
+      const { ticket } = await api.issueOrderTicket(orderId, {
+        idempotencyKey: ticketKey.current,
+      });
+      ticketKey.current = undefined;
+      const file = await Print.printToFileAsync({ html: ticketHtml(ticket) });
+      if (!(await Sharing.isAvailableAsync())) {
+        setMessage(`Ticket guardado en ${file.uri}`);
+        return;
+      }
+      await Sharing.shareAsync(file.uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Compartir ticket B&J',
+        UTI: 'com.adobe.pdf',
+      });
+      setMessage('Ticket PDF generado desde los datos confirmados.');
+    } catch (cause) {
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo generar el ticket. Reintenta para recuperar el mismo ticket.',
+      );
+    }
+  };
+  const refundPayment = async () => {
+    if (!order) return;
+    const amountCents = centsFromInput(refundAmount);
+    const payment = order.payments.find((item) => item.id === refundPaymentId);
+    if (
+      !payment ||
+      amountCents <= 0 ||
+      amountCents > payment.refundableCents ||
+      !refundReason.trim()
+    ) {
+      setMessage('Selecciona un pago, indica un importe disponible y escribe el motivo.');
+      return;
+    }
+    const request = JSON.stringify({
+      paymentId: payment.id,
+      orderItemId: refundOrderItemId,
+      amountCents,
+      reason: refundReason.trim(),
+    });
+    if (refundKey.current && refundKey.current.request !== request) {
+      setMessage('Reintenta primero la devolución pendiente con los mismos datos.');
+      return;
+    }
+    if (!refundKey.current) refundKey.current = { request, key: createIdempotencyKey() };
+    setMessage(undefined);
+    try {
+      await api.refundOrderPayment(orderId, {
+        idempotencyKey: refundKey.current.key,
+        paymentId: payment.id,
+        ...(refundOrderItemId ? { orderItemId: refundOrderItemId } : {}),
+        amountCents,
+        reason: refundReason.trim(),
+      });
+      refundKey.current = undefined;
+      setRefundAmount('');
+      setRefundReason('');
+      setMessage('Devolución registrada. La caja y el saldo fueron actualizados.');
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+    } catch (cause) {
+      if (cause instanceof BjApiError && !cause.ambiguous) refundKey.current = undefined;
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo registrar la devolución. Reintenta la misma solicitud.',
+      );
+    }
+  };
+  if (isLoading || capabilitiesQuery.isLoading) return <Loading label="Cargando comanda…" />;
   if (!order)
     return (
       <ScrollScreen>
@@ -260,12 +499,128 @@ export function OrderDetailPanel({
         action={<StatusPill status={order.status} />}
       />
       <Text style={styles.total}>{money(order.totalCents)}</Text>
+      {order.manualDiscountCents > 0 ? (
+        <Text style={shared.subtitle}>
+          Descuento {money(order.manualDiscountCents)} · {order.manualDiscountReason}
+        </Text>
+      ) : null}
       <Text style={shared.subtitle}>
         {order.neighborhood}
         {order.streetAndNumber ? ` · ${order.streetAndNumber}` : ''}
         {order.references ? `\nReferencias: ${order.references}` : ''}
         {order.deliveryNotes ? `\nIndicaciones: ${order.deliveryNotes}` : ''}
       </Text>
+      <Card>
+        <Text style={shared.label}>Cobro</Text>
+        <Text style={shared.text}>
+          Cobrado {money(order.paidCents)} · saldo {money(order.balanceCents)}
+        </Text>
+        {paymentsEnabled && order.balanceCents > 0 ? (
+          <>
+            <View style={styles.paymentRow}>
+              {(['cash', 'card', 'transfer'] as const).map((method) => (
+                <Pill
+                  key={method}
+                  label={{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[method]}
+                  selected={paymentMethod === method}
+                  onPress={() => {
+                    setPaymentMethod(method);
+                    if (checkoutSplitMethod === method) setCheckoutSplitMethod('none');
+                  }}
+                />
+              ))}
+            </View>
+            <Field
+              label="Recibido (MXN)"
+              keyboardType="decimal-pad"
+              value={received}
+              onChangeText={setReceived}
+            />
+            {order.fulfillment === 'counter' && order.status === 'ready' ? (
+              <>
+                <View style={styles.paymentRow}>
+                  <Pill
+                    label="Un solo medio"
+                    selected={checkoutSplitMethod === 'none'}
+                    onPress={() => setCheckoutSplitMethod('none')}
+                  />
+                  {(['cash', 'card', 'transfer'] as const)
+                    .filter((method) => method !== paymentMethod)
+                    .map((method) => (
+                      <Pill
+                        key={method}
+                        label={`+ ${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[method]}`}
+                        selected={checkoutSplitMethod === method}
+                        onPress={() => setCheckoutSplitMethod(method)}
+                      />
+                    ))}
+                </View>
+                {checkoutSplitMethod !== 'none' ? (
+                  <Field
+                    label={`Aplicar en ${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[checkoutSplitMethod]} (MXN)`}
+                    keyboardType="decimal-pad"
+                    value={checkoutSplitAmount}
+                    onChangeText={setCheckoutSplitAmount}
+                  />
+                ) : null}
+                <Button
+                  label="Cobrar y entregar"
+                  secondary
+                  onPress={() => void checkoutCounter()}
+                />
+              </>
+            ) : (
+              <Button label="Registrar cobro" secondary onPress={() => void collectPayment()} />
+            )}
+          </>
+        ) : paymentsEnabled ? (
+          <Text style={shared.subtitle}>Pago completo confirmado.</Text>
+        ) : (
+          <Notice kind="warning">
+            Los cobros y devoluciones están deshabilitados en el servidor.
+          </Notice>
+        )}
+      </Card>
+      {paymentsEnabled && order.payments.some((payment) => payment.refundableCents > 0) ? (
+        <Card>
+          <Text style={shared.label}>Devoluciones</Text>
+          <View style={styles.paymentRow}>
+            <Pill
+              label="Importe general"
+              selected={!refundOrderItemId}
+              onPress={() => setRefundOrderItemId('')}
+            />
+            {order.items.map((item) => (
+              <Pill
+                key={item.id}
+                label={`${item.quantity}× ${item.productName}`}
+                selected={refundOrderItemId === item.id}
+                onPress={() => setRefundOrderItemId(item.id)}
+              />
+            ))}
+          </View>
+          <View style={styles.paymentRow}>
+            {order.payments
+              .filter((payment) => payment.refundableCents > 0)
+              .map((payment) => (
+                <Pill
+                  key={payment.id}
+                  label={`${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]} · ${money(payment.refundableCents)} disponibles`}
+                  selected={refundPaymentId === payment.id}
+                  onPress={() => setRefundPaymentId(payment.id)}
+                />
+              ))}
+          </View>
+          <Field
+            label="Importe a devolver (MXN)"
+            keyboardType="decimal-pad"
+            value={refundAmount}
+            onChangeText={setRefundAmount}
+          />
+          <Field label="Motivo" value={refundReason} onChangeText={setRefundReason} />
+          <Button label="Registrar devolución" secondary onPress={() => void refundPayment()} />
+        </Card>
+      ) : null}
       <Card>
         {order.items.map((item) => (
           <View key={item.id} style={styles.item}>
@@ -286,21 +641,30 @@ export function OrderDetailPanel({
       {message ? (
         <Notice kind={message.startsWith('Código') ? 'info' : 'error'}>{message}</Notice>
       ) : null}
-      {nextStatus[order.status] ? (
+      {unifiedOrdersEnabled &&
+      (order.fulfillment === 'counter' && order.status === 'ready'
+        ? order.balanceCents === 0
+          ? 'delivered'
+          : undefined
+        : nextStatus[order.status]) ? (
         <Button
           label={
             change.isPending
               ? 'Actualizando…'
-              : `Marcar como ${statusLabel(nextStatus[order.status]!)}`
+              : `Marcar como ${statusLabel(order.fulfillment === 'counter' && order.status === 'ready' ? 'delivered' : nextStatus[order.status]!)}`
           }
           disabled={change.isPending}
           onPress={() => {
             setMessage(undefined);
-            change.mutate(nextStatus[order.status]!);
+            change.mutate(
+              order.fulfillment === 'counter' && order.status === 'ready'
+                ? 'delivered'
+                : nextStatus[order.status]!,
+            );
           }}
         />
       ) : null}
-      {['new', 'preparing', 'ready'].includes(order.status) ? (
+      {unifiedOrdersEnabled && ['new', 'preparing', 'ready'].includes(order.status) ? (
         <Button
           label={change.isPending ? 'Actualizando…' : 'Cancelar comanda'}
           secondary
@@ -313,6 +677,13 @@ export function OrderDetailPanel({
       ) : null}
       {order.status === 'delivered' ? (
         <>
+          {ticketsEnabled && (
+            <Button
+              label="Generar y compartir ticket PDF"
+              secondary
+              onPress={() => void shareTicket()}
+            />
+          )}
           <Button
             label={order.spinCodeIssued ? 'Recuperar código de ruleta' : 'Emitir código de ruleta'}
             secondary
@@ -666,5 +1037,6 @@ const styles = StyleSheet.create({
   total: { color: colors.gold, fontSize: 30, fontWeight: '800' },
   item: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 4 },
   event: { paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
+  paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
 });

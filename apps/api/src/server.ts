@@ -140,7 +140,7 @@ export async function buildApp(env = process.env) {
     return result;
   });
 
-  await registerAdmin(app, database, config);
+  await registerAdmin(app, database, config, orderNotifier);
   await registerOperator(app, database, config, orderNotifier);
   app.setErrorHandler((error, _request, reply) => {
     const handled = error as Error & { statusCode?: number };

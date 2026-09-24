@@ -26,6 +26,7 @@ export const capabilityKeySchema = z.enum([
   'pos_tickets',
   'expenses',
   'profitability_reports',
+  'pos_cutover',
 ]);
 export const capabilitySchema = z.object({
   key: capabilityKeySchema,
@@ -33,6 +34,16 @@ export const capabilitySchema = z.object({
   updatedAt: z.string().datetime({ offset: true }),
 });
 export const capabilitiesResponseSchema = z.object({ capabilities: z.array(capabilitySchema) });
+export const capabilityActivationSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  enabled: z.boolean(),
+  activationNote: z.string().trim().min(8).max(500),
+});
+export type CapabilityActivation = z.infer<typeof capabilityActivationSchema>;
+export const capabilityReadinessSchema = z.object({
+  capabilities: z.array(capabilitySchema),
+  legacyPendingOrders: z.number().int().nonnegative(),
+});
 
 export const authenticatedActorSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('admin'), userId: z.uuid(), origin: z.literal('admin_web') }),

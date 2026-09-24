@@ -1,6 +1,6 @@
 {
   "name": "@bj/mobile",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -22,6 +22,7 @@
     "expo": "~57.0.24",
     "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.19",
+    "expo-print": "~57.0.2",
     "expo-router": "~57.0.22",
     "expo-secure-store": "~57.0.4",
     "expo-sharing": "~57.0.21",

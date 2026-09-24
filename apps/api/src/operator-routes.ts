@@ -16,6 +16,18 @@ import {
   purchaseCreateSchema,
   productionBatchCreateSchema,
   recipeVersionCreateSchema,
+  unifiedOrderQuoteSchema,
+  unifiedOrderConfirmSchema,
+  cashSessionOpenSchema,
+  cashMovementSchema,
+  cashSessionCloseSchema,
+  orderPaymentCreateSchema,
+  orderRefundCreateSchema,
+  counterCheckoutSchema,
+  ticketIssueSchema,
+  expenseCreateSchema,
+  profitabilityReportSchema,
+  reportPeriodSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -23,6 +35,7 @@ import {
   type InMemoryOrderNotifier,
   OrderError,
   createOrder,
+  createUnifiedOrder,
   getOrder,
   issueOrderSpinCode,
   listOrders,
@@ -50,6 +63,21 @@ import {
 import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+import { issueOrderTicket } from './ticket-service.js';
+import { createOperatingExpense } from './expense-service.js';
+import { profitabilityReport } from './profitability-service.js';
+import { calculateCart } from '@bj/contracts';
+import {
+  cashSessionState,
+  closeCashSession,
+  openCashSession,
+  recordCashMovement,
+} from './cash-session-service.js';
+import {
+  checkoutCounterOrder,
+  collectOrderPayment,
+  refundOrderPayment,
+} from './payment-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -153,12 +181,118 @@ export async function registerOperator(
       productionBatchCreateSchema.parse(request.body),
       { kind: 'device', deviceId: context.deviceId, origin: 'android' },
     );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/operator/cash-session', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    return cashSessionState(database.sql);
+  });
+  app.post('/api/v1/operator/cash-session/open', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await openCashSession(database.sql, cashSessionOpenSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
     return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/cash-session/movements', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await recordCashMovement(database.sql, cashMovementSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/cash-session/close', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'cash_sessions');
+    const outcome = await closeCashSession(
+      database.sql,
+      cashSessionCloseSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+
+  app.post('/api/v1/operator/unified-orders/quote', async (request, reply) => {
+    if (!(await protectOperator(request, reply, database, config))) return;
+    const input = unifiedOrderQuoteSchema.parse(request.body);
+    if (input.fulfillment === 'delivery' && (!input.neighborhood || !input.streetAndNumber))
+      return reply.code(400).send({ message: 'Domicilio requiere colonia y dirección.' });
+    const catalog = await loadCatalog(database);
+    const totals = calculateCart(
+      catalog,
+      input.items.map((item, index) => ({
+        id: `quote-${index}`,
+        productId: item.productId,
+        quantity: item.quantity,
+        removedIngredients: item.removedIngredients,
+        modifierIds: item.modifierIds,
+        combo: item.combo,
+        ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+        note: item.note,
+      })),
+    );
+    if (input.manualDiscountCents > totals.totalCents)
+      return reply
+        .code(400)
+        .send({ message: 'El descuento supera el total después de promociones.' });
+    const totalCents = totals.totalCents - input.manualDiscountCents;
+    return {
+      fulfillment: input.fulfillment,
+      subtotalCents: totalCents,
+      deliveryCents: 0,
+      totalCents,
+      manualDiscountCents: input.manualDiscountCents,
+      manualDiscountReason: input.manualDiscountReason,
+      promotion: totals.promotion ?? null,
+    };
+  });
+  app.post('/api/v1/operator/unified-orders', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    const input = unifiedOrderConfirmSchema.parse(request.body);
+    if (input.fulfillment === 'delivery' && (!input.neighborhood || !input.streetAndNumber))
+      return reply.code(400).send({ message: 'Domicilio requiere colonia y dirección.' });
+    const catalog = await loadCatalog(database);
+    try {
+      const outcome = await createUnifiedOrder(
+        database.sql,
+        catalog,
+        input,
+        context.deviceId,
+        notifier,
+      );
+      return reply.code(outcome.statusCode).send({ order: outcome.order, reused: outcome.reused });
+    } catch (error) {
+      if (error instanceof OrderError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
+    }
   });
   app.post('/api/v1/operator/business/entries', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
     if (!context) return;
-    return recordEntry(database.sql, entrySchema.parse(request.body), context.deviceId);
+    const input = entrySchema.parse(request.body);
+    if (input.kind === 'sale') {
+      const [capability] = await database.sql<{ enabled: boolean }[]>`
+        select enabled from pos_capabilities where capability in ('unified_orders','pos_cutover') and enabled=true limit 1`;
+      if (capability)
+        return reply
+          .code(409)
+          .send({ message: 'Las ventas se registran desde el circuito unificado de comandas.' });
+    }
+    return recordEntry(database.sql, input, context.deviceId);
   });
   app.get('/api/v1/operator/inventory/ledger', async (request, reply) => {
     if (!(await protectOperator(request, reply, database, config))) return;
@@ -352,6 +486,81 @@ export async function registerOperator(
     return parseWhatsAppOrder(input.rawMessage, catalog);
   });
 
+  app.post('/api/v1/operator/orders/:id/payments', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await collectOrderPayment(
+      database.sql,
+      id,
+      orderPaymentCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/orders/:id/counter-checkout', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'unified_orders');
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await checkoutCounterOrder(
+      database.sql,
+      id,
+      counterCheckoutSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+      notifier,
+    );
+    return reply.send(outcome);
+  });
+  app.post('/api/v1/operator/orders/:id/refunds', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await refundOrderPayment(
+      database.sql,
+      id,
+      orderRefundCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/orders/:id/ticket', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'pos_tickets');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await issueOrderTicket(
+      database.sql,
+      id,
+      ticketIssueSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ticket: outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/operator/expenses', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'expenses');
+    const outcome = await createOperatingExpense(
+      database.sql,
+      expenseCreateSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply
+      .code(outcome.statusCode)
+      .send(Object.assign({}, outcome.result as object, { reused: outcome.reused }));
+  });
+  app.get('/api/v1/operator/reports/profitability', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'profitability_reports');
+    const query = reportPeriodSchema.parse(request.query);
+    return profitabilityReportSchema.parse(await profitabilityReport(database.sql, query));
+  });
+
   app.get('/api/v1/operator/orders', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
     if (!context) return;
@@ -366,6 +575,48 @@ export async function registerOperator(
     const input = orderCreateRequestSchema.parse(request.body);
     const catalog = await loadCatalog(database);
     try {
+      const [capability] = await database.sql<{ capability: string }[]>`
+        select capability from pos_capabilities where capability in ('unified_orders','pos_cutover') and enabled=true limit 1`;
+      if (capability) {
+        await requireCapability(database.sql, 'unified_orders');
+        if (!input.neighborhood || !input.streetAndNumber)
+          return reply
+            .code(400)
+            .send({ message: 'La importación de domicilio requiere colonia y dirección.' });
+        const totals = calculateCart(
+          catalog,
+          input.items.map((item, index) => ({
+            id: `whatsapp-${index}`,
+            productId: item.productId,
+            quantity: item.quantity,
+            removedIngredients: item.removedIngredients,
+            modifierIds: item.modifierIds,
+            combo: item.combo,
+            ...(item.drinkProductId ? { drinkProductId: item.drinkProductId } : {}),
+            note: item.note,
+          })),
+        );
+        const result = await createUnifiedOrder(
+          database.sql,
+          catalog,
+          {
+            fulfillment: 'delivery',
+            customerName: input.customerName,
+            neighborhood: input.neighborhood,
+            streetAndNumber: input.streetAndNumber,
+            manualDiscountCents: 0,
+            manualDiscountReason: '',
+            items: input.items,
+            quotedTotalCents: totals.totalCents,
+            idempotencyKey: input.idempotencyKey,
+            source: 'manual_whatsapp',
+            rawMessage: input.rawMessage,
+          },
+          context.deviceId,
+          notifier,
+        );
+        return reply.code(result.statusCode).send({ order: result.order, reused: result.reused });
+      }
       const order = await createOrder(database.sql, catalog, input, context.deviceId, notifier);
       return reply.code(201).send({ order });
     } catch (error) {
@@ -389,6 +640,20 @@ export async function registerOperator(
     if (!context) return;
     const id = z.uuid().parse((request.params as { id: string }).id);
     const input = orderStatusUpdateSchema.parse(request.body);
+    const [cutover] = await database.sql<{ enabled: boolean }[]>`
+      select enabled from pos_capabilities where capability='pos_cutover'`;
+    if (cutover?.enabled) {
+      const order = await getOrder(database.sql, id);
+      if (!order) return reply.code(404).send({ message: 'La comanda no existe.' });
+      if (!order.quotedAt)
+        return reply
+          .code(409)
+          .send({ message: 'Las comandas históricas anteriores al corte son de consulta.' });
+      if (!input.idempotencyKey)
+        return reply
+          .code(400)
+          .send({ message: 'La actualización requiere clave idempotente. Actualiza la app.' });
+    }
     try {
       return {
         order: await updateOrderStatus(
@@ -398,6 +663,7 @@ export async function registerOperator(
           input.note,
           context.deviceId,
           notifier,
+          input.idempotencyKey,
         ),
       };
     } catch (error) {

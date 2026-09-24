@@ -5,6 +5,7 @@ import {
   operatorDeviceActivationResponseSchema,
   orderDraftSchema,
   orderResponseSchema,
+  orderSchema,
   ordersResponseSchema,
   spinCodeIssueResponseSchema,
   stockLedgerStateSchema,
@@ -28,6 +29,20 @@ import {
   type RecipeVersionCreate,
   type ProductionBatchCreate,
   type RecipeVersionState,
+  unifiedOrderQuoteResponseSchema,
+  type UnifiedOrderConfirm,
+  cashSessionStateSchema,
+  type CashMovement,
+  type CashSessionClose,
+  type CashSessionOpen,
+  type CashSessionState,
+  type OrderPaymentCreate,
+  type OrderRefundCreate,
+  orderTicketResponseSchema,
+  type TicketIssue,
+  type ExpenseCreate,
+  profitabilityReportSchema,
+  type ProfitabilityReport,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -205,12 +220,77 @@ export class BjApiClient {
     }).then((result) => result.order);
   }
 
-  updateOrderStatus(id: string, status: OrderStatus, note = '') {
+  updateOrderStatus(id: string, status: OrderStatus, note = '', idempotencyKey?: string) {
     return this.request(`/operator/orders/${id}/status`, orderResponseSchema, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status, note }),
+      body: JSON.stringify({ status, note, ...(idempotencyKey ? { idempotencyKey } : {}) }),
     }).then((result) => result.order);
+  }
+
+  collectOrderPayment(id: string, input: OrderPaymentCreate) {
+    return this.post(
+      '/operator/orders/' + id + '/payments',
+      z.object({
+        orderId: z.string().uuid(),
+        appliedCents: z.number().int(),
+        changeCents: z.number().int(),
+        balanceCents: z.number().int(),
+      }),
+      input,
+    );
+  }
+
+  checkoutCounterOrder(id: string, input: OrderPaymentCreate) {
+    return this.post(
+      `/operator/orders/${id}/counter-checkout`,
+      z.object({
+        order: orderSchema,
+        changeCents: z.number().int().nonnegative(),
+        reused: z.boolean(),
+      }),
+      input,
+    );
+  }
+
+  refundOrderPayment(id: string, input: OrderRefundCreate) {
+    return this.post(
+      '/operator/orders/' + id + '/refunds',
+      z.object({
+        orderId: z.string().uuid(),
+        refundedCents: z.number().int(),
+        method: z.enum(['cash', 'card', 'transfer']),
+      }),
+      input,
+    );
+  }
+
+  issueOrderTicket(id: string, input: TicketIssue) {
+    return this.post(`/operator/orders/${id}/ticket`, orderTicketResponseSchema, input);
+  }
+
+  createExpense(input: ExpenseCreate) {
+    return this.post(
+      '/operator/expenses',
+      z.object({
+        id: z.string().uuid(),
+        category: z.string(),
+        description: z.string(),
+        amountCents: z.number().int().positive(),
+        paymentMethod: z.enum(['cash', 'card', 'transfer']),
+        fundsOrigin: z.enum(['cash_session', 'external']),
+        cashSessionId: z.string().uuid().nullable(),
+        paymentId: z.string().uuid().nullable(),
+        occurredAt: z.string().datetime({ offset: true }),
+        reused: z.boolean(),
+      }),
+      input,
+    );
+  }
+
+  profitabilityReport(from: string, to: string, page = 1): Promise<ProfitabilityReport> {
+    const params = new URLSearchParams({ from, to, page: String(page), pageSize: '50' });
+    return this.request(`/operator/reports/profitability?${params}`, profitabilityReportSchema);
   }
 
   issueSpinCode(id: string, idempotencyKey = createIdempotencyKey()) {
@@ -253,6 +333,41 @@ export class BjApiClient {
 
   createProductionBatch(input: ProductionBatchCreate) {
     return this.post('/operator/production/batches', productionBatchResponseSchema, input);
+  }
+
+  quoteUnifiedOrder(input: Omit<UnifiedOrderConfirm, 'idempotencyKey' | 'quotedTotalCents'>) {
+    return this.post('/operator/unified-orders/quote', unifiedOrderQuoteResponseSchema, input);
+  }
+
+  confirmUnifiedOrder(input: UnifiedOrderConfirm) {
+    return this.post('/operator/unified-orders', orderResponseSchema, input).then(
+      (result) => result.order,
+    );
+  }
+
+  cashSession(): Promise<CashSessionState> {
+    return this.request('/operator/cash-session', cashSessionStateSchema);
+  }
+
+  openCashSession(input: CashSessionOpen) {
+    return this.post('/operator/cash-session/open', cashSessionStateSchema, input);
+  }
+
+  recordCashMovement(input: CashMovement) {
+    return this.post('/operator/cash-session/movements', cashSessionStateSchema, input);
+  }
+
+  closeCashSession(input: CashSessionClose) {
+    return this.post(
+      '/operator/cash-session/close',
+      z.object({
+        id: z.string().uuid(),
+        expectedCents: z.number().int(),
+        countedCents: z.number().int(),
+        differenceCents: z.number().int(),
+      }),
+      input,
+    );
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {
@@ -316,7 +431,11 @@ export class BjApiClient {
   }
 
   /** Reads an authenticated SSE stream until it closes or is aborted. */
-  async subscribeOrderEvents(onOrder: (orderId: string) => void, signal: AbortSignal) {
+  async subscribeOrderEvents(
+    onOrder: (orderId: string) => void,
+    signal: AbortSignal,
+    onConnected?: () => void,
+  ) {
     const response = await this.requestFetch(`${this.baseUrl}/operator/orders/stream`, {
       headers: await this.headers(),
       signal,
@@ -340,6 +459,10 @@ export class BjApiClient {
         for (const event of events) {
           const type = event.match(/^event:\s*(.+)$/m)?.[1];
           const data = event.match(/^data:\s*(.+)$/m)?.[1];
+          if (type === 'connected') {
+            onConnected?.();
+            continue;
+          }
           if (type !== 'order' || !data) continue;
           let rawPayload: unknown;
           try {

@@ -152,6 +152,7 @@ export const mobileDevices = pgTable('mobile_devices', {
 export const orders = pgTable('orders', {
   id: uuid('id').primaryKey().defaultRandom(),
   source: text('source').notNull().default('manual_whatsapp'),
+  fulfillment: text('fulfillment').notNull().default('delivery'),
   status: text('status').notNull().default('new'),
   customerName: text('customer_name').notNull(),
   neighborhood: text('neighborhood').notNull().default(''),
@@ -163,8 +164,15 @@ export const orders = pgTable('orders', {
   subtotalCents: integer('subtotal_cents').notNull(),
   deliveryCents: integer('delivery_cents').notNull().default(0),
   totalCents: integer('total_cents').notNull(),
+  manualDiscountCents: integer('manual_discount_cents').notNull().default(0),
+  manualDiscountReason: text('manual_discount_reason').notNull().default(''),
   idempotencyKey: uuid('idempotency_key').notNull().unique(),
   createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  quotedAt: timestamp('quoted_at', { withTimezone: true }),
+  preparingAt: timestamp('preparing_at', { withTimezone: true }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -185,6 +193,10 @@ export const orderItems = pgTable('order_items', {
   combo: jsonb('combo').$type<Record<string, unknown> | null>(),
   note: text('note').notNull().default(''),
   lineTotalCents: integer('line_total_cents').notNull(),
+  compositionSnapshot: jsonb('composition_snapshot')
+    .$type<Record<string, unknown>[]>()
+    .notNull()
+    .default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -197,6 +209,7 @@ export const orderEvents = pgTable('order_events', {
   status: text('status'),
   note: text('note').notNull().default(''),
   deviceId: uuid('device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -260,6 +273,36 @@ export const stockReservations = pgTable('stock_reservations', {
   resolvedAt: timestamp('resolved_at', { withTimezone: true }),
 });
 
+export const orderStockReservations = pgTable(
+  'order_stock_reservations',
+  {
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    reservationId: uuid('reservation_id')
+      .notNull()
+      .references(() => stockReservations.id),
+    componentKind: text('component_kind').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.orderId, table.reservationId] })],
+);
+
+export const orderCostAllocations = pgTable('order_cost_allocations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  reservationId: uuid('reservation_id')
+    .notNull()
+    .references(() => stockReservations.id),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  costCents: numeric('cost_cents', { precision: 20, scale: 6 }).notNull(),
+  classification: text('classification').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  classifiedAt: timestamp('classified_at', { withTimezone: true }),
+});
 export const stockLedgerMovements = pgTable('stock_ledger_movements', {
   id: uuid('id').primaryKey().defaultRandom(),
   ingredientId: uuid('ingredient_id')
@@ -296,6 +339,58 @@ export const ingredientPresentations = pgTable('ingredient_presentations', {
   name: text('name').notNull(),
   baseQuantity: numeric('base_quantity', { precision: 16, scale: 3 }).notNull(),
   active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const purchaseDocuments = pgTable('purchase_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  supplierId: uuid('supplier_id')
+    .notNull()
+    .references(() => suppliers.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  reference: text('reference').notNull().default(''),
+  status: text('status').notNull(),
+  subtotalCents: integer('subtotal_cents').notNull(),
+  discountCents: integer('discount_cents').notNull(),
+  acquisitionCents: integer('acquisition_cents').notNull(),
+  totalCents: integer('total_cents').notNull(),
+  paymentMethod: text('payment_method').notNull(),
+  fundsOrigin: text('funds_origin').notNull(),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  reversedById: uuid('reversed_by_id'),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  reversedAt: timestamp('reversed_at', { withTimezone: true }),
+});
+export const purchaseLines = pgTable('purchase_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  purchaseId: uuid('purchase_id')
+    .notNull()
+    .references(() => purchaseDocuments.id),
+  ingredientId: uuid('ingredient_id')
+    .notNull()
+    .references(() => stockIngredients.id),
+  presentationId: uuid('presentation_id')
+    .notNull()
+    .references(() => ingredientPresentations.id),
+  presentationQuantity: numeric('presentation_quantity', { precision: 16, scale: 3 }).notNull(),
+  appliedBaseQuantity: numeric('applied_base_quantity', { precision: 16, scale: 3 }).notNull(),
+  grossCents: integer('gross_cents').notNull(),
+  allocatedDiscountCents: integer('allocated_discount_cents').notNull(),
+  allocatedAcquisitionCents: integer('allocated_acquisition_cents').notNull(),
+  inventoryValueCents: integer('inventory_value_cents').notNull(),
+});
+export const purchaseReversals = pgTable('purchase_reversals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  purchaseId: uuid('purchase_id')
+    .notNull()
+    .unique()
+    .references(() => purchaseDocuments.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  reason: text('reason').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -404,6 +499,100 @@ export const stockMovements = pgTable('stock_movements', {
   valueCents: numeric('value_cents', { precision: 20, scale: 6 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const cashSessions = pgTable('cash_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  status: text('status').notNull(),
+  openingFundCents: integer('opening_fund_cents').notNull(),
+  expectedCents: integer('expected_cents').notNull(),
+  countedCents: integer('counted_cents'),
+  differenceCents: integer('difference_cents'),
+  openedByDeviceId: uuid('opened_by_device_id').references(() => mobileDevices.id),
+  openedByUserId: uuid('opened_by_user_id').references(() => adminUsers.id),
+  openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+});
+export const cashMovements = pgTable('cash_movements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  cashSessionId: uuid('cash_session_id')
+    .notNull()
+    .references(() => cashSessions.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  kind: text('kind').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  reason: text('reason').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderPayments = pgTable('order_payments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  method: text('method').notNull(),
+  receivedCents: integer('received_cents').notNull(),
+  appliedCents: integer('applied_cents').notNull(),
+  changeCents: integer('change_cents').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderRefunds = pgTable('order_refunds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  paymentId: uuid('payment_id')
+    .notNull()
+    .references(() => orderPayments.id),
+  orderItemId: uuid('order_item_id').references(() => orderItems.id),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  method: text('method').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  reason: text('reason').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const operatingExpenses = pgTable('operating_expenses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  category: text('category').notNull(),
+  description: text('description').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  paymentMethod: text('payment_method').notNull(),
+  fundsOrigin: text('funds_origin').notNull(),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  linkedPaymentId: uuid('linked_payment_id').references(() => orderPayments.id),
+  incurredAt: timestamp('incurred_at', { withTimezone: true }).notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdByUserId: uuid('created_by_user_id').references(() => adminUsers.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderTickets = pgTable(
+  'order_tickets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id),
+    idempotencyKey: uuid('idempotency_key').notNull().unique(),
+    orderSnapshot: jsonb('order_snapshot').$type<Record<string, unknown>>().notNull(),
+    paymentSnapshot: jsonb('payment_snapshot').$type<Record<string, unknown>[]>().notNull(),
+    issuedByDeviceId: uuid('issued_by_device_id').references(() => mobileDevices.id),
+    issuedByUserId: uuid('issued_by_user_id').references(() => adminUsers.id),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('order_tickets_order_idx').on(table.orderId)],
+);
 
 export const posCapabilities = pgTable('pos_capabilities', {
   capability: text('capability').primaryKey(),

@@ -21,12 +21,35 @@ import { createPurchase } from './purchasing-service.js';
 import { reversePurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+import {
+  createUnifiedOrder,
+  getOrder,
+  InMemoryOrderNotifier,
+  updateOrderStatus,
+} from './order-service.js';
+import {
+  checkoutCounterOrder,
+  collectOrderPayment,
+  refundOrderPayment,
+} from './payment-service.js';
+import { issueOrderTicket } from './ticket-service.js';
+import { activateCapability, capabilityReadiness } from './capability-service.js';
+import { createOperatingExpense } from './expense-service.js';
+import { profitabilityCsv, profitabilityReport } from './profitability-service.js';
+import { seedCatalog, type OrderTicket } from '@bj/contracts';
+import {
+  cashSessionState,
+  closeCashSession,
+  openCashSession,
+  recordCashMovement,
+} from './cash-session-service.js';
 
 // Runs the actual migration and service SQL on embedded PostgreSQL. This adapter
 // only bridges tagged parameters/results; it does not simulate inventory logic.
 let pg: PGlite;
 let sql: Sql;
 const device = randomUUID();
+const adminUser = randomUUID();
 const ingredient = randomUUID();
 function adapter(db: { query: PGlite['query'] }) {
   const tag = async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -87,6 +110,15 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0007_purchasing.sql',
       '0008_recipe_versions.sql',
       '0009_production.sql',
+      '0010_unified_orders.sql',
+      '0011_cash_sessions.sql',
+      '0012_payments_refunds.sql',
+      '0013_pos_tickets.sql',
+      '0014_pos_cutover.sql',
+      '0015_operating_expenses.sql',
+      '0016_admin_order_actors.sql',
+      '0017_refund_item_reference.sql',
+      '0018_manual_order_discounts.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -95,13 +127,21 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       await pg.exec(migration);
     }
     await pg.query('insert into mobile_devices(id,name) values($1,$2)', [device, 'Prueba']);
+    await pg.query('insert into admin_users(id,email,password_hash) values($1,$2,$3)', [
+      adminUser,
+      'pos-test@example.invalid',
+      'test-hash',
+    ]);
     await pg.exec(
       "insert into categories(id,slug,name) values('burgers','burgers','Burgers'); insert into products(id,slug,category_id,name,description,price_cents) values('burger','burger','burgers','Burger','',10000)",
     );
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from operating_expenses; delete from order_tickets; delete from order_refunds; delete from order_payments; delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from cash_movements; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from cash_sessions; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+    );
+    await pg.exec(
+      "update pos_capabilities set enabled=false,activation_note='',updated_by_user_id=null",
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -116,6 +156,688 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   });
   afterAll(async () => {
     await pg?.close();
+  });
+
+  it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
+    await purchase(1000, 10000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 100,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150.000',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    const sourceProduct = seedCatalog.products[0]!;
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...sourceProduct,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const key = randomUUID();
+    const input = {
+      idempotencyKey: key,
+      fulfillment: 'counter' as const,
+      customerName: '',
+      neighborhood: '',
+      streetAndNumber: '',
+      manualDiscountCents: 0,
+      manualDiscountReason: '',
+      quotedTotalCents: 10000,
+      items: [
+        {
+          productId: 'burger',
+          quantity: 1,
+          removedIngredients: [],
+          modifierIds: [],
+          combo: false,
+          note: '',
+        },
+      ],
+    };
+    const notifier = new InMemoryOrderNotifier();
+    const created = await createUnifiedOrder(sql, catalog, input, device, notifier);
+    const retried = await createUnifiedOrder(sql, catalog, input, device, notifier);
+    expect(retried).toMatchObject({ order: { id: created.order.id }, reused: true });
+    await expect(
+      createUnifiedOrder(sql, catalog, { ...input, quotedTotalCents: 9999 }, device, notifier),
+    ).rejects.toThrow('clave');
+    let [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
+      select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
+      from stock_ingredients where id=${ingredient}`;
+    expect(balance).toEqual({ stock: '1000.000', reserved: '150.000', active: 1 });
+    await updateOrderStatus(sql, created.order.id, 'preparing', '', device, notifier, randomUUID());
+    await updateOrderStatus(sql, created.order.id, 'ready', '', device, notifier, randomUUID());
+    await updateOrderStatus(
+      sql,
+      created.order.id,
+      'cancelled',
+      'Cliente canceló',
+      device,
+      notifier,
+      randomUUID(),
+    );
+    [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
+      select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
+      from stock_ingredients where id=${ingredient}`;
+    expect(balance).toEqual({ stock: '850.000', reserved: '0.000', active: 0 });
+    const [allocation] = await sql<{ classification: string; cost_cents: string }[]>`
+      select classification,cost_cents::text from order_cost_allocations where order_id=${created.order.id}`;
+    expect(allocation).toEqual({ classification: 'waste', cost_cents: '1500.000000' });
+  });
+
+  it('aplica el descuento manual después de promociones y fija el motivo y neto por partida', async () => {
+    await purchase(1000, 10000);
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150.000',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
+    const product = seedCatalog.products[0]!;
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...product,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const created = await createUnifiedOrder(
+      sql,
+      catalog,
+      {
+        idempotencyKey: randomUUID(),
+        fulfillment: 'counter',
+        customerName: '',
+        neighborhood: '',
+        streetAndNumber: '',
+        manualDiscountCents: 1250,
+        manualDiscountReason: 'Promoción por demora',
+        quotedTotalCents: 8750,
+        items: [
+          {
+            productId: 'burger',
+            quantity: 1,
+            removedIngredients: [],
+            modifierIds: [],
+            combo: false,
+            note: '',
+          },
+        ],
+      },
+      device,
+      new InMemoryOrderNotifier(),
+    );
+    expect(created.order).toMatchObject({
+      totalCents: 8750,
+      subtotalCents: 8750,
+      manualDiscountCents: 1250,
+      manualDiscountReason: 'Promoción por demora',
+      items: [{ lineTotalCents: 8750 }],
+    });
+    await expect(
+      createUnifiedOrder(
+        sql,
+        catalog,
+        {
+          idempotencyKey: randomUUID(),
+          fulfillment: 'counter',
+          customerName: '',
+          neighborhood: '',
+          streetAndNumber: '',
+          manualDiscountCents: 10001,
+          manualDiscountReason: 'Descuento mayor al total',
+          quotedTotalCents: 0,
+          items: [
+            {
+              productId: 'burger',
+              quantity: 1,
+              removedIngredients: [],
+              modifierIds: [],
+              combo: false,
+              note: '',
+            },
+          ],
+        },
+        device,
+        new InMemoryOrderNotifier(),
+      ),
+    ).rejects.toThrow('no puede superar');
+  });
+
+  it('atribuye ventas POS web y sus cambios de estado al usuario administrativo autenticado', async () => {
+    await purchase(1000, 10000);
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 100,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150.000',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      { kind: 'admin', userId: adminUser, origin: 'admin_web' },
+    );
+    const product = seedCatalog.products[0]!;
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...product,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const actor = { kind: 'admin' as const, userId: adminUser, origin: 'admin_web' as const };
+    const created = await createUnifiedOrder(
+      sql,
+      catalog,
+      {
+        idempotencyKey: randomUUID(),
+        fulfillment: 'counter',
+        customerName: '',
+        neighborhood: '',
+        streetAndNumber: '',
+        manualDiscountCents: 0,
+        manualDiscountReason: '',
+        quotedTotalCents: 10000,
+        items: [
+          {
+            productId: 'burger',
+            quantity: 1,
+            removedIngredients: [],
+            modifierIds: [],
+            combo: false,
+            note: '',
+          },
+        ],
+      },
+      '',
+      new InMemoryOrderNotifier(),
+      actor,
+    );
+    await updateOrderStatus(
+      sql,
+      created.order.id,
+      'preparing',
+      '',
+      actor,
+      new InMemoryOrderNotifier(),
+      randomUUID(),
+    );
+    const [audit] = await sql<
+      { order_actor: string; event_actor: string; reservation_actor: string }[]
+    >`
+      select o.created_by_user_id::text as order_actor,e.created_by_user_id::text as event_actor,r.created_by_user_id::text as reservation_actor
+      from orders o join order_events e on e.order_id=o.id and e.status='preparing'
+      join order_stock_reservations x on x.order_id=o.id join stock_reservations r on r.id=x.reservation_id
+      where o.id=${created.order.id}`;
+    expect(audit).toEqual({
+      order_actor: adminUser,
+      event_actor: adminUser,
+      reservation_actor: adminUser,
+    });
+  });
+
+  it('mantiene una sola caja abierta y concilia movimientos idempotentes', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const opened = await openCashSession(
+      sql,
+      { idempotencyKey: randomUUID(), openingFundCents: 500 },
+      actor,
+    );
+    await expect(
+      openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor),
+    ).rejects.toThrow('abierto');
+    const key = randomUUID();
+    await recordCashMovement(
+      sql,
+      { idempotencyKey: key, kind: 'income', amountCents: 1000, reason: 'Fondo adicional' },
+      actor,
+    );
+    await recordCashMovement(
+      sql,
+      { idempotencyKey: key, kind: 'income', amountCents: 1000, reason: 'Fondo adicional' },
+      actor,
+    );
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 1500 });
+    const closed = await closeCashSession(
+      sql,
+      { idempotencyKey: randomUUID(), countedCents: 1450, note: 'Diferencia' },
+      actor,
+    );
+    expect(closed.result).toMatchObject({
+      id: opened.result.session!.id,
+      expectedCents: 1500,
+      differenceCents: -50,
+    });
+  });
+
+  it('cobra pagos mixtos, calcula cambio y descuenta el reembolso de caja', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,idempotency_key,created_by_device_id) values(${orderId},'manual_whatsapp','Cliente',10000,10000,${randomUUID()},${device})`;
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor);
+    const payment = await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [
+          { method: 'card', receivedCents: 4000, appliedCents: 4000 },
+          { method: 'cash', receivedCents: 10000, appliedCents: 6000 },
+        ],
+      },
+      actor,
+    );
+    expect(payment.result).toMatchObject({
+      appliedCents: 10000,
+      changeCents: 4000,
+      balanceCents: 0,
+    });
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 6000 });
+    const [cashPayment] = await sql<
+      { id: string }[]
+    >`select id from order_payments where order_id=${orderId} and method='cash'`;
+    await refundOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        paymentId: cashPayment!.id,
+        amountCents: 2000,
+        reason: 'Devolución parcial',
+      },
+      actor,
+    );
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
+  });
+
+  it('limita devoluciones por partida al importe asignado y conserva el vínculo', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,idempotency_key,created_by_device_id) values(${orderId},'pos','Cliente',10000,10000,${randomUUID()},${device})`;
+    const [firstItem] = await sql<{ id: string }[]>`
+      insert into order_items(order_id,product_id,product_name,unit_price_cents,quantity,line_total_cents)
+      values(${orderId},'burger','Burger',5000,1,5000) returning id
+    `;
+    const [secondItem] = await sql<{ id: string }[]>`
+      insert into order_items(order_id,product_id,product_name,unit_price_cents,quantity,line_total_cents)
+      values(${orderId},'burger','Burger',5000,1,5000) returning id
+    `;
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 10000 }, actor);
+    await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [{ method: 'cash', receivedCents: 10000, appliedCents: 10000 }],
+      },
+      actor,
+    );
+    const [payment] = await sql<
+      { id: string }[]
+    >`select id from order_payments where order_id=${orderId}`;
+    await refundOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        paymentId: payment!.id,
+        orderItemId: firstItem!.id,
+        amountCents: 5000,
+        reason: 'Devolución de la primera partida',
+      },
+      actor,
+    );
+    await expect(
+      refundOrderPayment(
+        sql,
+        orderId,
+        {
+          idempotencyKey: randomUUID(),
+          paymentId: payment!.id,
+          orderItemId: firstItem!.id,
+          amountCents: 1,
+          reason: 'Intento de exceder la partida',
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await refundOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        paymentId: payment!.id,
+        orderItemId: secondItem!.id,
+        amountCents: 5000,
+        reason: 'Devolución de la segunda partida',
+      },
+      actor,
+    );
+    const [refunds] = await sql<{ refunds: number; linked: number }[]>`
+      select count(*)::int as refunds,count(order_item_id)::int as linked
+      from order_refunds where order_id=${orderId}
+    `;
+    expect(refunds).toEqual({ refunds: 2, linked: 2 });
+    await sql`update orders set status='delivered' where id=${orderId}`;
+    expect((await getOrder(sql, orderId))?.balanceCents).toBe(0);
+    await expect(
+      collectOrderPayment(
+        sql,
+        orderId,
+        {
+          idempotencyKey: randomUUID(),
+          payments: [{ method: 'card', receivedCents: 1, appliedCents: 1 }],
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('cobra y entrega mostrador en una sola operación idempotente', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const notifier = new InMemoryOrderNotifier();
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,fulfillment,customer_name,subtotal_cents,total_cents,status,quoted_at,idempotency_key,created_by_device_id) values(${orderId},'pos','counter','Mostrador',10000,10000,'ready',now(),${randomUUID()},${device})`;
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor);
+    const key = randomUUID();
+    const input = {
+      idempotencyKey: key,
+      payments: [
+        { method: 'card' as const, receivedCents: 4000, appliedCents: 4000 },
+        { method: 'cash' as const, receivedCents: 10000, appliedCents: 6000 },
+      ],
+    };
+    const checkout = await checkoutCounterOrder(sql, orderId, input, actor, notifier);
+    expect(checkout.order).toMatchObject({ status: 'delivered', balanceCents: 0 });
+    expect(checkout.changeCents).toBe(4000);
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 6000 });
+    const retry = await checkoutCounterOrder(sql, orderId, input, actor, notifier);
+    expect(retry.reused).toBe(true);
+    expect(retry.order.status).toBe('delivered');
+    const [counts] = await sql<{ payments: number; events: number }[]>`
+      select (select count(*)::int from order_payments where order_id=${orderId}) as payments,
+      (select count(*)::int from order_events where order_id=${orderId} and status='delivered') as events`;
+    expect(counts).toEqual({ payments: 2, events: 1 });
+  });
+
+  it('concilia gastos de caja e impide duplicar comisiones de un pago', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 5000 }, actor);
+    const cashKey = randomUUID();
+    const cashExpense = {
+      idempotencyKey: cashKey,
+      category: 'utilities' as const,
+      description: 'Gas del local',
+      amountCents: 1000,
+      paymentMethod: 'cash' as const,
+      fundsOrigin: 'cash_session' as const,
+      occurredAt: new Date().toISOString(),
+    };
+    await createOperatingExpense(sql, cashExpense, actor);
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
+    expect((await createOperatingExpense(sql, cashExpense, actor)).reused).toBe(true);
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
+
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,idempotency_key,created_by_device_id) values(${orderId},'pos','Mostrador',2000,2000,${randomUUID()},${device})`;
+    await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [{ method: 'card', receivedCents: 2000, appliedCents: 2000 }],
+      },
+      actor,
+    );
+    const [payment] = await sql<
+      { id: string }[]
+    >`select id from order_payments where order_id=${orderId}`;
+    await createOperatingExpense(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        category: 'commission',
+        description: 'Comisión adquirente',
+        amountCents: 100,
+        paymentMethod: 'card',
+        fundsOrigin: 'external',
+        occurredAt: new Date().toISOString(),
+        paymentId: payment!.id,
+      },
+      actor,
+    );
+    await expect(
+      createOperatingExpense(
+        sql,
+        {
+          idempotencyKey: randomUUID(),
+          category: 'commission',
+          description: 'Comisión duplicada',
+          amountCents: 100,
+          paymentMethod: 'card',
+          fundsOrigin: 'external',
+          occurredAt: new Date().toISOString(),
+          paymentId: payment!.id,
+        },
+        actor,
+      ),
+    ).rejects.toThrow();
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
+  });
+
+  it('calcula el corte local y pagina detalle sin truncar el CSV', async () => {
+    await pg.exec(`insert into operating_expenses(
+      idempotency_key,category,description,amount_cents,payment_method,funds_origin,incurred_at,created_by_device_id
+    ) select gen_random_uuid(),'supplies','Compra de prueba '||n,100,'transfer','external',
+      '2026-09-22T12:00:00Z'::timestamptz,'${device}'::uuid from generate_series(1,225) n`);
+    await pg.exec(
+      "insert into categories(id,slug,name) values('sides','sides','Acompañamientos'); insert into products(id,slug,category_id,name,description,price_cents) values('fries','fries','sides','Papas','',10000)",
+    );
+    const [order] = await sql<{ id: string }[]>`
+      insert into orders(source,fulfillment,status,customer_name,subtotal_cents,total_cents,idempotency_key,quoted_at,delivered_at,created_at,updated_at)
+      values('pos','counter','delivered','Cliente',200,200,${randomUUID()},'2026-09-22T12:00:00Z','2026-09-22T12:00:00Z','2026-09-22T12:00:00Z','2026-09-22T12:00:00Z') returning id`;
+    await sql`insert into order_items(order_id,product_id,product_name,unit_price_cents,quantity,line_total_cents) values
+      (${order!.id},'burger','Burger',100,1,100),(${order!.id},'fries','Papas',100,1,100)`;
+    const [payment] = await sql<{ id: string }[]>`
+      insert into order_payments(order_id,idempotency_key,method,received_cents,applied_cents,change_cents)
+      values(${order!.id},${randomUUID()},'card',200,200,0) returning id`;
+    await sql`insert into order_refunds(order_id,payment_id,idempotency_key,method,amount_cents,reason,created_at)
+      values(${order!.id},${payment!.id},${randomUUID()},'card',50,'Reembolso parcial','2026-09-22T13:00:00Z')`;
+    await sql`insert into order_refunds(order_id,payment_id,order_item_id,idempotency_key,method,amount_cents,reason,created_at)
+      values(${order!.id},${payment!.id},(select id from order_items where order_id=${order!.id} and product_id='burger'),${randomUUID()},'card',10,'Reembolso de burger','2026-09-22T14:00:00Z')`;
+    const report = await profitabilityReport(sql, {
+      from: '2026-09-22',
+      to: '2026-09-22',
+      page: 1,
+      pageSize: 50,
+    });
+    expect(report.totalRows).toBe(228);
+    expect(report.rows).toHaveLength(50);
+    expect(report.summary.operatingExpensesCents).toBe(22500);
+    expect(report.summary.grossSalesCents).toBe(200);
+    expect(report.summary.refundsCents).toBe(60);
+    expect(report.summary.netSalesCents).toBe(140);
+    expect(report.summary.unvaluedDeliveredOrders).toBe(1);
+    expect(report.byProduct).toEqual([
+      { key: 'Papas', quantity: 1, amountCents: 75 },
+      { key: 'Burger', quantity: 1, amountCents: 65 },
+    ]);
+    expect(report.summary.operatingResultCents).toBe(-22360);
+    expect(new Date(report.from).toISOString()).toBe('2026-09-22T06:00:00.000Z');
+    const csv = await profitabilityCsv(sql, { from: '2026-09-22', to: '2026-09-22' });
+    expect(csv.split('\r\n')).toHaveLength(229);
+  });
+
+  it('persiste una copia inmutable del ticket y la recupera al reintentar', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,status,idempotency_key,created_by_device_id) values(${orderId},'pos','Mostrador',10000,10000,'ready',${randomUUID()},${device})`;
+    const key = randomUUID();
+    await openCashSession(sql, { idempotencyKey: randomUUID(), openingFundCents: 0 }, actor);
+    await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [{ method: 'card', receivedCents: 10000, appliedCents: 10000 }],
+      },
+      actor,
+    );
+    await sql`update orders set status='delivered',delivered_at=now() where id=${orderId}`;
+    const issued = await issueOrderTicket(sql, orderId, { idempotencyKey: key }, actor);
+    const issuedTicket = issued.result as unknown as OrderTicket;
+    expect(issuedTicket.order.totalCents).toBe(10000);
+    expect(issuedTicket.payments).toEqual([{ method: 'card', appliedCents: 10000 }]);
+    await sql`update orders set customer_name='Nombre cambiado' where id=${orderId}`;
+    const retry = await issueOrderTicket(sql, orderId, { idempotencyKey: key }, actor);
+    expect(retry.reused).toBe(true);
+    const recoveredTicket = retry.result as unknown as OrderTicket;
+    expect(recoveredTicket.id).toBe(issuedTicket.id);
+    expect(recoveredTicket.order.customerName).toBe('Mostrador');
+    const [count] = await sql<
+      { count: number }[]
+    >`select count(*)::int as count from order_tickets where order_id=${orderId}`;
+    expect(count!.count).toBe(1);
+  });
+
+  it('exige las capacidades base y cerrar las comandas antiguas antes del corte', async () => {
+    const adminId = randomUUID();
+    const actor = { kind: 'admin' as const, userId: adminId, origin: 'admin_web' as const };
+    await sql`insert into admin_users(id,email,password_hash) values(${adminId},${`${adminId}@test.local`},'hash')`;
+    await expect(
+      activateCapability(
+        sql,
+        'pos_cutover',
+        {
+          idempotencyKey: randomUUID(),
+          enabled: true,
+          activationNote: 'Corte controlado de prueba',
+        },
+        actor,
+      ),
+    ).rejects.toThrow('Activa primero');
+    for (const key of [
+      'stock_ledger',
+      'purchasing',
+      'recipe_versions',
+      'production',
+      'unified_orders',
+      'cash_sessions',
+      'payments_refunds',
+      'pos_tickets',
+    ] as const) {
+      await activateCapability(
+        sql,
+        key,
+        { idempotencyKey: randomUUID(), enabled: true, activationNote: `Prueba controlada ${key}` },
+        actor,
+      );
+    }
+    const legacyOrder = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,idempotency_key,created_by_device_id) values(${legacyOrder},'manual_whatsapp','Pendiente legado',100,100,${randomUUID()},${device})`;
+    await expect(
+      activateCapability(
+        sql,
+        'pos_cutover',
+        {
+          idempotencyKey: randomUUID(),
+          enabled: true,
+          activationNote: 'Corte controlado de prueba',
+        },
+        actor,
+      ),
+    ).rejects.toThrow('Cierra o cancela');
+    await sql`update orders set status='cancelled' where id=${legacyOrder}`;
+    const cutover = await activateCapability(
+      sql,
+      'pos_cutover',
+      { idempotencyKey: randomUUID(), enabled: true, activationNote: 'Corte controlado de prueba' },
+      actor,
+    );
+    expect(cutover.result.enabled).toBe(true);
+    expect((await capabilityReadiness(sql)).legacyPendingOrders).toBe(0);
+    await expect(
+      activateCapability(
+        sql,
+        'pos_cutover',
+        { idempotencyKey: randomUUID(), enabled: false, activationNote: 'Prueba no reversible' },
+        actor,
+      ),
+    ).rejects.toThrow('irreversible');
+  });
+
+  it('no habilita rentabilidad antes de activar su cadena completa de datos', async () => {
+    await expect(
+      activateCapability(
+        sql,
+        'profitability_reports',
+        { idempotencyKey: randomUUID(), enabled: true, activationNote: 'Reporte de prueba' },
+        { kind: 'device', deviceId: device, origin: 'android' },
+      ),
+    ).rejects.toThrow('Activa primero: stock_ledger');
   });
 
   it('no inventa costos para ingredientes sin compras', async () => {
@@ -375,6 +1097,11 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       'insert into ingredient_presentations(id,ingredient_id,supplier_id,name,base_quantity) values($1,$2,$3,$4,$5)',
       [presentation, ingredient, supplier, 'Bolsa 1 kg', '1000'],
     );
+    await openCashSession(
+      sql,
+      { idempotencyKey: randomUUID(), openingFundCents: 2000 },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
     const result = await createPurchase(
       sql,
       {
@@ -382,7 +1109,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
         supplierId: supplier,
         reference: 'F-1',
         paymentMethod: 'cash',
-        fundsOrigin: 'external',
+        fundsOrigin: 'cash_session',
         discountCents: 100,
         acquisitionCents: 50,
         lines: [
@@ -401,6 +1128,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       lines: [{ appliedBaseQuantity: '1000.000', inventoryValueCents: 950 }],
     });
     expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
+    expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 1050 });
   });
   it('revierte una compra sin consumos posteriores y no permite repetirla', async () => {
     const supplier = randomUUID(),
