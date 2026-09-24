@@ -19,10 +19,12 @@ NODE
 command -v docker >/dev/null || { echo 'Docker is required for the PostgreSQL 17 client image.' >&2; exit 1; }
 mkdir -p -- "$POS_REHEARSAL_ARTIFACT_DIR"
 artifact_dir="$(cd "$POS_REHEARSAL_ARTIFACT_DIR" && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 restore_url="${POS_REHEARSAL_SOURCE_URL%/*}/${restore_database}"
 
 docker run --rm --network host \
   --volume "$artifact_dir:/rehearsal" \
+  --volume "$script_dir/postgres-restore-row-counts.sql:/rehearsal/postgres-restore-row-counts.sql:ro" \
   --env POS_REHEARSAL_SOURCE_URL \
   --env POS_REHEARSAL_RESTORE_URL="$restore_url" \
   --env POS_REHEARSAL_RESTORE_DATABASE="$restore_database" \
