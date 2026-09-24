@@ -48,9 +48,13 @@ Instala primero la versión Flutter de referencia en un dispositivo de prueba y 
 | Negocio                    | Inicio, POS, inventario, recetas, caja y reportes       | Compra, comanda, cobro, merma, gasto y receta  |
 | Actualizaciones            | SSE con reconexión y consulta cada 20 s en primer plano | Cambio desde otro dispositivo                  |
 
-La integración de cobros de comandas, caja, proveedores, preparaciones y demás POS
-se desarrolla en entregas con la API como fuente de verdad. Antes de activar el
-circuito unificado se deben validar esta matriz en teléfono y tablet Android,
-conciliar inventario y cerrar o cancelar las comandas pendientes del circuito
-anterior. Consulta [POS_IMPLEMENTATION_PLAN.md](POS_IMPLEMENTATION_PLAN.md) y
-[POS_TRACEABILITY.md](POS_TRACEABILITY.md) para la secuencia y evidencias.
+El POS de compras, proveedores, inventario, recetas, producción, comandas,
+cobros, caja, gastos y rentabilidad ya está integrado en `apps/mobile` y usa la
+API como fuente de verdad. Los PR de cada entrega están enlazados en la
+[matriz de trazabilidad](POS_TRACEABILITY.md); el check de CI compila el bundle Expo, pero todavía
+falta recorrer la matriz en teléfono y tablet Android. Antes de activar el
+circuito unificado, concilia inventario, prueba la restauración de una copia
+aislada y cierra o cancela las comandas pendientes del circuito anterior.
+Consulta [POS_IMPLEMENTATION_PLAN.md](POS_IMPLEMENTATION_PLAN.md),
+[POS_OPERATIONS.md](POS_OPERATIONS.md) y [POS_TRACEABILITY.md](POS_TRACEABILITY.md)
+para el proceso de activación y sus evidencias.
