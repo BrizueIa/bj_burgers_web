@@ -156,6 +156,7 @@ function mapOrder(
   row: Record<string, unknown>,
   items: Record<string, unknown>[],
   events: Record<string, unknown>[],
+  payments: Record<string, unknown>[],
 ) {
   return {
     id: row.id,
@@ -185,6 +186,15 @@ function mapOrder(
     deliveredAt: asIso(row.delivered_at),
     cancelledAt: asIso(row.cancelled_at),
     spinCodeIssued: Boolean(row.spin_code_id),
+    payments: payments.map((payment) => ({
+      id: payment.id,
+      method: payment.method,
+      receivedCents: payment.received_cents,
+      appliedCents: payment.applied_cents,
+      changeCents: payment.change_cents,
+      refundedCents: payment.refunded_cents,
+      refundableCents: Math.max(0, Number(payment.applied_cents) - Number(payment.refunded_cents)),
+    })),
     items: items.map((item) => ({
       id: item.id,
       productId: item.product_id,
@@ -213,40 +223,53 @@ export async function getOrder(sql: Sql, id: string) {
     select o.*, sc.id as spin_code_id, coalesce((select sum(applied_cents) from order_payments where order_id=o.id),0)::int as paid_cents, coalesce((select sum(amount_cents) from order_refunds where order_id=o.id),0)::int as refunded_cents from orders o left join spin_codes sc on sc.order_id=o.id where o.id=${id} limit 1`;
   const row = rows[0];
   if (!row) return null;
-  const [items, events] = await Promise.all([
+  const [items, events, payments] = await Promise.all([
     sql<
       Record<string, unknown>[]
     >`select * from order_items where order_id=${id} order by created_at, id`,
     sql<
       Record<string, unknown>[]
     >`select * from order_events where order_id=${id} order by created_at, id`,
+    sql<
+      Record<string, unknown>[]
+    >`select p.id,p.method,p.received_cents,p.applied_cents,p.change_cents,coalesce(sum(r.amount_cents),0)::int as refunded_cents from order_payments p left join order_refunds r on r.payment_id=p.id where p.order_id=${id} group by p.id order by p.created_at,p.id`,
   ]);
-  return mapOrder(row, items, events);
+  return mapOrder(row, items, events, payments);
 }
 
 export async function listOrders(sql: Sql, status?: OrderStatus) {
   const rows = status
     ? await sql<Record<string, unknown>[]>`
-        select o.*, sc.id as spin_code_id from orders o left join spin_codes sc on sc.order_id=o.id
+        select o.*, sc.id as spin_code_id,
+          coalesce((select sum(applied_cents) from order_payments where order_id=o.id),0)::int as paid_cents,
+          coalesce((select sum(amount_cents) from order_refunds where order_id=o.id),0)::int as refunded_cents
+        from orders o left join spin_codes sc on sc.order_id=o.id
         where o.status=${status} order by o.created_at desc limit 250`
     : await sql<Record<string, unknown>[]>`
-        select o.*, sc.id as spin_code_id from orders o left join spin_codes sc on sc.order_id=o.id
+        select o.*, sc.id as spin_code_id,
+          coalesce((select sum(applied_cents) from order_payments where order_id=o.id),0)::int as paid_cents,
+          coalesce((select sum(amount_cents) from order_refunds where order_id=o.id),0)::int as refunded_cents
+        from orders o left join spin_codes sc on sc.order_id=o.id
         order by o.created_at desc limit 250`;
   const ids = rows.map((row) => row.id as string);
   if (!ids.length) return [];
-  const [items, events] = await Promise.all([
+  const [items, events, payments] = await Promise.all([
     sql<
       Record<string, unknown>[]
     >`select * from order_items where order_id = any(${ids}) order by created_at, id`,
     sql<
       Record<string, unknown>[]
     >`select * from order_events where order_id = any(${ids}) order by created_at, id`,
+    sql<
+      Record<string, unknown>[]
+    >`select p.id,p.order_id,p.method,p.received_cents,p.applied_cents,p.change_cents,coalesce(sum(r.amount_cents),0)::int as refunded_cents from order_payments p left join order_refunds r on r.payment_id=p.id where p.order_id = any(${ids}) group by p.id order by p.created_at,p.id`,
   ]);
   return rows.map((row) =>
     mapOrder(
       row,
       items.filter((item) => item.order_id === row.id),
       events.filter((event) => event.order_id === row.id),
+      payments.filter((payment) => payment.order_id === row.id),
     ),
   );
 }

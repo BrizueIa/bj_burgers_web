@@ -15,6 +15,9 @@ import {
   promotionSchema,
   recipeVersionCreateSchema,
   productionBatchCreateSchema,
+  ticketIssueSchema,
+  orderPaymentCreateSchema,
+  orderRefundCreateSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -24,6 +27,8 @@ import { createRecipeVersion, recipeVersionState } from './recipe-version-servic
 import { requireCapability } from './pos-foundation-service.js';
 import { createProductionBatch } from './production-service.js';
 import { listOrders } from './order-service.js';
+import { issueOrderTicket } from './ticket-service.js';
+import { collectOrderPayment, refundOrderPayment } from './payment-service.js';
 
 interface AdminContext {
   userId: string;
@@ -165,6 +170,45 @@ export async function registerAdmin(app: FastifyInstance, database: Database, co
     if (!context) return;
     reply.header('cache-control', 'no-store');
     return { orders: await listOrders(database.sql) };
+  });
+  app.post('/api/v1/admin/orders/:id/ticket', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'pos_tickets');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await issueOrderTicket(
+      database.sql,
+      id,
+      ticketIssueSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply.code(outcome.statusCode).send({ ticket: outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/admin/orders/:id/payments', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await collectOrderPayment(
+      database.sql,
+      id,
+      orderPaymentCreateSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
+  });
+  app.post('/api/v1/admin/orders/:id/refunds', async (request, reply) => {
+    const context = await protect(request, reply);
+    if (!context) return;
+    await requireCapability(database.sql, 'payments_refunds');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await refundOrderPayment(
+      database.sql,
+      id,
+      orderRefundCreateSchema.parse(request.body),
+      { kind: 'admin', userId: context.userId, origin: 'admin_web' },
+    );
+    return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
   });
 
   app.get('/api/v1/admin/inventory/ledger', async (request, reply) => {

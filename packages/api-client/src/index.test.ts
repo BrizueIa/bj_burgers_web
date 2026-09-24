@@ -39,6 +39,7 @@ describe('BjApiClient', () => {
           deliveredAt: null,
           cancelledAt: null,
           spinCodeIssued: false,
+          payments: [],
           items: [],
           events: [],
         },
@@ -98,5 +99,30 @@ describe('BjApiClient', () => {
     await expect(client.capabilities()).resolves.toEqual([
       { key: 'unified_orders', enabled: false, updatedAt: '2026-09-19T00:00:00.000Z' },
     ]);
+  });
+
+  it('refetches live data after the SSE connection is restored', async () => {
+    const bytes = new TextEncoder().encode(
+      'event: connected\ndata: {"device":"Tablet cocina"}\n\nevent: order\ndata: {"orderId":"4efbd774-a99b-43a0-a7c7-34d43c1cd800"}\n\n',
+    );
+    const client = new BjApiClient({
+      baseUrl: 'https://api.example/api/v1',
+      credentialStore: store,
+      fetch: (async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes);
+              controller.close();
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )) as typeof globalThis.fetch,
+    });
+    const onOrder = vi.fn();
+    const onConnected = vi.fn();
+    await client.subscribeOrderEvents(onOrder, new AbortController().signal, onConnected);
+    expect(onConnected).toHaveBeenCalledOnce();
+    expect(onOrder).toHaveBeenCalledWith('4efbd774-a99b-43a0-a7c7-34d43c1cd800');
   });
 });

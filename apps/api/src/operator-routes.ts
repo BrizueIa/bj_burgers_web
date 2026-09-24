@@ -23,6 +23,7 @@ import {
   cashSessionCloseSchema,
   orderPaymentCreateSchema,
   orderRefundCreateSchema,
+  ticketIssueSchema,
 } from '@bj/contracts';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
@@ -58,6 +59,7 @@ import {
 import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+import { issueOrderTicket } from './ticket-service.js';
 import { calculateCart } from '@bj/contracts';
 import {
   cashSessionState,
@@ -65,6 +67,7 @@ import {
   openCashSession,
   recordCashMovement,
 } from './cash-session-service.js';
+import { collectOrderPayment, refundOrderPayment } from './payment-service.js';
 
 interface OperatorContext {
   deviceId: string;
@@ -481,6 +484,19 @@ export async function registerOperator(
     );
     return reply.code(outcome.statusCode).send({ ...outcome.result, reused: outcome.reused });
   });
+  app.post('/api/v1/operator/orders/:id/ticket', async (request, reply) => {
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
+    await requireCapability(database.sql, 'pos_tickets');
+    const id = z.uuid().parse((request.params as { id: string }).id);
+    const outcome = await issueOrderTicket(
+      database.sql,
+      id,
+      ticketIssueSchema.parse(request.body),
+      { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+    );
+    return reply.code(outcome.statusCode).send({ ticket: outcome.result, reused: outcome.reused });
+  });
 
   app.get('/api/v1/operator/orders', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
@@ -585,5 +601,3 @@ export async function registerOperator(
     });
   });
 }
-
-import { collectOrderPayment, refundOrderPayment } from './payment-service.js';

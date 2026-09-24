@@ -470,6 +470,55 @@ export const cashMovements = pgTable('cash_movements', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const orderPayments = pgTable('order_payments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  method: text('method').notNull(),
+  receivedCents: integer('received_cents').notNull(),
+  appliedCents: integer('applied_cents').notNull(),
+  changeCents: integer('change_cents').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderRefunds = pgTable('order_refunds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => orders.id),
+  paymentId: uuid('payment_id')
+    .notNull()
+    .references(() => orderPayments.id),
+  cashSessionId: uuid('cash_session_id').references(() => cashSessions.id),
+  idempotencyKey: uuid('idempotency_key').notNull().unique(),
+  method: text('method').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  reason: text('reason').notNull(),
+  createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const orderTickets = pgTable(
+  'order_tickets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id),
+    idempotencyKey: uuid('idempotency_key').notNull().unique(),
+    orderSnapshot: jsonb('order_snapshot').$type<Record<string, unknown>>().notNull(),
+    paymentSnapshot: jsonb('payment_snapshot').$type<Record<string, unknown>[]>().notNull(),
+    issuedByDeviceId: uuid('issued_by_device_id').references(() => mobileDevices.id),
+    issuedByUserId: uuid('issued_by_user_id').references(() => adminUsers.id),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('order_tickets_order_idx').on(table.orderId)],
+);
+
 export const posCapabilities = pgTable('pos_capabilities', {
   capability: text('capability').primaryKey(),
   enabled: boolean('enabled').notNull().default(false),

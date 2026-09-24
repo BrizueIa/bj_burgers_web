@@ -17,9 +17,11 @@ export async function collectOrderPayment(
     },
     async (tx) => {
       const [order] = await tx<
-        { total_cents: number }[]
-      >`select total_cents from orders where id=${orderId} for update`;
+        { total_cents: number; status: string }[]
+      >`select total_cents,status from orders where id=${orderId} for update`;
       if (!order) throw new PosFoundationError(404, 'La comanda no existe.');
+      if (order.status === 'cancelled')
+        throw new PosFoundationError(409, 'No se puede cobrar una comanda cancelada.');
       const [totals] = await tx<
         { paid: number; refunded: number }[]
       >`select coalesce((select sum(applied_cents) from order_payments where order_id=${orderId}),0)::int as paid,coalesce((select sum(amount_cents) from order_refunds where order_id=${orderId}),0)::int as refunded`;
@@ -82,22 +84,33 @@ export async function refundOrderPayment(
       >`select coalesce(sum(amount_cents),0)::int as amount from order_refunds where payment_id=${input.paymentId}`;
       if (input.amountCents > payment.applied_cents - used!.amount)
         throw new PosFoundationError(409, 'El reembolso supera el saldo disponible del pago.');
-      let session: string | null = null;
+      const [row] = await tx<
+        { id: string; expected_cents: number }[]
+      >`select id,expected_cents from cash_sessions where status='open' for update`;
+      if (!row)
+        throw new PosFoundationError(409, 'Abre un turno de caja antes de registrar reembolsos.');
+      const session: string = row.id;
       if (payment.method === 'cash') {
-        const [row] = await tx<
-          { id: string; expected_cents: number }[]
-        >`select id,expected_cents from cash_sessions where status='open' for update`;
-        if (!row || row.expected_cents < input.amountCents)
+        if (row.expected_cents < input.amountCents)
           throw new PosFoundationError(
             409,
             'No hay efectivo esperado suficiente en el turno actual.',
           );
-        session = row.id;
         const cashDelta = -input.amountCents;
         await tx`update cash_sessions set expected_cents=${row.expected_cents + cashDelta} where id=${row.id}`;
         await tx`insert into cash_movements(cash_session_id,idempotency_key,kind,amount_cents,reason,created_by_device_id) values(${row.id},gen_random_uuid(),'expense',${cashDelta},'Reembolso de comanda',${actor.kind === 'device' ? actor.deviceId : null})`;
       }
-      await tx`insert into order_refunds(order_id,payment_id,cash_session_id,idempotency_key,method,amount_cents,reason,created_by_device_id) values(${orderId},${input.paymentId},${session},${input.idempotencyKey},${payment.method},${input.amountCents},${input.reason},${actor.kind === 'device' ? actor.deviceId : null})`;
+      const [refund] = await tx<
+        { id: string }[]
+      >`insert into order_refunds(order_id,payment_id,cash_session_id,idempotency_key,method,amount_cents,reason,created_by_device_id) values(${orderId},${input.paymentId},${session},${input.idempotencyKey},${payment.method},${input.amountCents},${input.reason},${actor.kind === 'device' ? actor.deviceId : null}) returning id`;
+      await auditOperation(tx, actor, {
+        action: 'refund',
+        entity: 'order_payment',
+        entityId: refund!.id,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+        details: { orderId, paymentId: input.paymentId, amountCents: input.amountCents },
+      });
       return { orderId, refundedCents: input.amountCents, method: payment.method };
     },
   );

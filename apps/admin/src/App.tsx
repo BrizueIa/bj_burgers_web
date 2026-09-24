@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   BadgeDollarSign,
   Clock3,
@@ -14,7 +14,13 @@ import {
   Smartphone,
   Tags,
 } from 'lucide-react';
-import type { BusinessSettings, Order, PromotionRule, StockLedgerState } from '@bj/contracts';
+import type {
+  BusinessSettings,
+  Order,
+  OrderTicket,
+  PromotionRule,
+  StockLedgerState,
+} from '@bj/contracts';
 
 type Tab =
   | 'overview'
@@ -625,12 +631,177 @@ function PurchasingView({ data }: { data: Purchasing | null }) {
   );
 }
 
-function OrdersView({ orders }: { orders: Order[] | null }) {
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character]!,
+  );
+}
+
+function ticketHtml(ticket: OrderTicket) {
+  const rows = ticket.order.items
+    .map(
+      (item) =>
+        `<tr><td>${item.quantity} × ${escapeHtml(item.productName)}</td><td>${formatMoney(item.lineTotalCents)}</td></tr>`,
+    )
+    .join('');
+  const payments = ticket.payments
+    .map(
+      (payment) =>
+        `<li>${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]}: ${formatMoney(payment.appliedCents)}</li>`,
+    )
+    .join('');
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>Ticket B&J</title><style>body{font:16px Arial,sans-serif;max-width:560px;margin:32px auto;color:#171717}h1,p{text-align:center}table{width:100%;border-collapse:collapse;margin:24px 0}td{padding:12px 0;border-bottom:1px solid #ddd}td:last-child{text-align:right}.total{text-align:right;font-size:20px;font-weight:bold}@media print{button{display:none}}</style><body><h1>B&amp;J Burgers</h1><p>Ticket ${escapeHtml(ticket.id.slice(0, 8).toUpperCase())}<br>${new Date(ticket.issuedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p><p>${escapeHtml(ticket.order.customerName || 'Mostrador')}</p><table>${rows}</table><p class="total">Total ${formatMoney(ticket.order.totalCents)}</p><ul>${payments}</ul><p style="text-align:center">Gracias por tu compra</p></body></html>`;
+}
+
+function RefundAction({ order, csrf, onSaved }: { order: Order; csrf: string; onSaved(): void }) {
+  const refundable = order.payments.filter((payment) => payment.refundableCents > 0);
+  const [paymentId, setPaymentId] = useState(refundable[0]?.id ?? '');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const retry = useRef<{ fingerprint: string; key: string } | undefined>(undefined);
+  async function refund() {
+    const payment = refundable.find((entry) => entry.id === paymentId);
+    const amountCents = Math.round(Number(amount) * 100);
+    if (
+      !payment ||
+      !Number.isSafeInteger(amountCents) ||
+      amountCents <= 0 ||
+      amountCents > payment.refundableCents ||
+      reason.trim().length < 3
+    ) {
+      setError('Elige un pago, un importe disponible y un motivo de al menos 3 caracteres.');
+      return;
+    }
+    const fingerprint = JSON.stringify({ paymentId, amountCents, reason: reason.trim() });
+    if (retry.current?.fingerprint !== fingerprint)
+      retry.current = { fingerprint, key: crypto.randomUUID() };
+    setBusy(true);
+    setError('');
+    try {
+      await request(`/api/v1/admin/orders/${order.id}/refunds`, {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          idempotencyKey: retry.current.key,
+          paymentId,
+          amountCents,
+          reason: reason.trim(),
+        }),
+      });
+      retry.current = undefined;
+      setAmount('');
+      setReason('');
+      onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo registrar la devolución.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!refundable.length) return null;
+  return (
+    <details>
+      <summary>Devolver pago</summary>
+      <div className="settings-grid">
+        <label>
+          Pago original
+          <select value={paymentId} onChange={(event) => setPaymentId(event.target.value)}>
+            {refundable.map((payment) => (
+              <option value={payment.id} key={payment.id}>
+                {{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]} ·{' '}
+                {formatMoney(payment.refundableCents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Importe (MXN)
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </label>
+        <label>
+          Motivo
+          <input value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+      </div>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <button className="secondary" disabled={busy} onClick={() => void refund()}>
+        {busy ? 'Registrando…' : 'Registrar devolución'}
+      </button>
+    </details>
+  );
+}
+
+function OrdersView({
+  orders,
+  csrf,
+  onSaved,
+}: {
+  orders: Order[] | null;
+  csrf: string;
+  onSaved(): void;
+}) {
+  const [busyId, setBusyId] = useState('');
+  const [error, setError] = useState('');
+  async function printTicket(orderId: string) {
+    const popup = window.open('', '_blank');
+    if (!popup) {
+      setError('Permite ventanas emergentes para generar el ticket.');
+      return;
+    }
+    popup.document.write('<p style="font:16px Arial;padding:24px">Preparando ticket…</p>');
+    setBusyId(orderId);
+    setError('');
+    try {
+      const result = await request<{ ticket: OrderTicket }>(
+        `/api/v1/admin/orders/${orderId}/ticket`,
+        {
+          method: 'POST',
+          headers: { 'x-csrf-token': csrf },
+          body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+        },
+      );
+      popup.document.open();
+      popup.document.write(ticketHtml(result.ticket));
+      popup.document.close();
+      popup.focus();
+      popup.print();
+    } catch (cause) {
+      popup.close();
+      setError(cause instanceof Error ? cause.message : 'No se pudo emitir el ticket.');
+    } finally {
+      setBusyId('');
+    }
+  }
   if (!orders) return <p>Cargando comandas…</p>;
   return (
     <section className="admin-card">
       <p className="eyebrow">Venta y preparación en un solo registro</p>
       <h2>Comandas recientes</h2>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="table-wrap">
         <table>
           <thead>
@@ -640,7 +811,10 @@ function OrdersView({ orders }: { orders: Order[] | null }) {
               <th>Modalidad</th>
               <th>Estado</th>
               <th>Total</th>
+              <th>Cobrado / saldo</th>
               <th>Partidas</th>
+              <th>Ticket</th>
+              <th>Devolución</th>
             </tr>
           </thead>
           <tbody>
@@ -659,13 +833,33 @@ function OrdersView({ orders }: { orders: Order[] | null }) {
                   <td>{order.status}</td>
                   <td>{formatMoney(order.totalCents)}</td>
                   <td>
+                    {formatMoney(order.paidCents - order.refundedCents)} /{' '}
+                    {formatMoney(order.balanceCents)}
+                  </td>
+                  <td>
                     {order.items.map((item) => item.quantity + '× ' + item.productName).join(', ')}
+                  </td>
+                  <td>
+                    <RefundAction order={order} csrf={csrf} onSaved={onSaved} />
+                  </td>
+                  <td>
+                    {order.status === 'delivered' ? (
+                      <button
+                        className="secondary"
+                        disabled={busyId === order.id}
+                        onClick={() => void printTicket(order.id)}
+                      >
+                        {busyId === order.id ? 'Preparando…' : 'PDF / imprimir'}
+                      </button>
+                    ) : (
+                      'Disponible al entregar'
+                    )}
                   </td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan={6}>Aún no hay comandas.</td>
+                <td colSpan={9}>Aún no hay comandas.</td>
               </tr>
             )}
           </tbody>
@@ -1757,7 +1951,7 @@ export default function App() {
           />
         )}
         {tab === 'purchasing' && <PurchasingView data={purchasing} />}
-        {tab === 'orders' && <OrdersView orders={orders} />}
+        {tab === 'orders' && <OrdersView orders={orders} csrf={csrf} onSaved={() => void load()} />}
         {tab === 'roulette' && (
           <Roulette
             prizes={dashboard.prizes}

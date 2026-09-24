@@ -85,6 +85,15 @@ export const orderEventSchema = z.object({
   note: z.string(),
   createdAt: z.string().datetime({ offset: true }),
 });
+export const orderPaymentSummarySchema = z.object({
+  id: z.uuid(),
+  method: z.enum(['cash', 'card', 'transfer']),
+  receivedCents: z.number().int().positive(),
+  appliedCents: z.number().int().positive(),
+  changeCents: z.number().int().nonnegative(),
+  refundedCents: z.number().int().nonnegative(),
+  refundableCents: z.number().int().nonnegative(),
+});
 export const orderSchema = z.object({
   id: z.uuid(),
   source: z.string(),
@@ -110,6 +119,7 @@ export const orderSchema = z.object({
   deliveredAt: z.string().datetime({ offset: true }).nullable(),
   cancelledAt: z.string().datetime({ offset: true }).nullable(),
   spinCodeIssued: z.boolean(),
+  payments: z.array(orderPaymentSummarySchema),
   items: z.array(orderItemSchema),
   events: z.array(orderEventSchema),
 });

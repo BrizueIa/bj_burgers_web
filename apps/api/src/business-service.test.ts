@@ -23,7 +23,8 @@ import { createRecipeVersion, recipeVersionState } from './recipe-version-servic
 import { createProductionBatch } from './production-service.js';
 import { createUnifiedOrder, InMemoryOrderNotifier, updateOrderStatus } from './order-service.js';
 import { collectOrderPayment, refundOrderPayment } from './payment-service.js';
-import { seedCatalog } from '@bj/contracts';
+import { issueOrderTicket } from './ticket-service.js';
+import { seedCatalog, type OrderTicket } from '@bj/contracts';
 import {
   cashSessionState,
   closeCashSession,
@@ -99,6 +100,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0010_unified_orders.sql',
       '0011_cash_sessions.sql',
       '0012_payments_refunds.sql',
+      '0013_pos_tickets.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -113,7 +115,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   }, 30000);
   beforeEach(async () => {
     await pg.exec(
-      'delete from order_refunds; delete from order_payments; delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from cash_movements; delete from cash_sessions; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
+      'delete from order_tickets; delete from order_refunds; delete from order_payments; delete from order_cost_allocations; delete from order_stock_reservations; delete from order_events; delete from order_items; delete from orders; delete from cash_movements; delete from cash_sessions; delete from production_batches; delete from recipe_version_components; delete from recipe_versions; delete from purchase_reversals; delete from purchase_lines; delete from purchase_documents; delete from ingredient_presentations; delete from suppliers; delete from stock_ledger_movements; delete from stock_reservations; delete from stock_movements; delete from business_entries; delete from recipe_lines; delete from product_recipes; delete from stock_ingredients;',
     );
     await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Carne','g')", [
       ingredient,
@@ -291,6 +293,36 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       actor,
     );
     expect((await cashSessionState(sql)).session).toMatchObject({ expectedCents: 4000 });
+  });
+
+  it('persiste una copia inmutable del ticket y la recupera al reintentar', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const orderId = randomUUID();
+    await sql`insert into orders(id,source,customer_name,subtotal_cents,total_cents,status,idempotency_key,created_by_device_id,delivered_at) values(${orderId},'pos','Mostrador',10000,10000,'delivered',${randomUUID()},${device},now())`;
+    const key = randomUUID();
+    await collectOrderPayment(
+      sql,
+      orderId,
+      {
+        idempotencyKey: randomUUID(),
+        payments: [{ method: 'card', receivedCents: 10000, appliedCents: 10000 }],
+      },
+      actor,
+    );
+    const issued = await issueOrderTicket(sql, orderId, { idempotencyKey: key }, actor);
+    const issuedTicket = issued.result as unknown as OrderTicket;
+    expect(issuedTicket.order.totalCents).toBe(10000);
+    expect(issuedTicket.payments).toEqual([{ method: 'card', appliedCents: 10000 }]);
+    await sql`update orders set customer_name='Nombre cambiado' where id=${orderId}`;
+    const retry = await issueOrderTicket(sql, orderId, { idempotencyKey: key }, actor);
+    expect(retry.reused).toBe(true);
+    const recoveredTicket = retry.result as unknown as OrderTicket;
+    expect(recoveredTicket.id).toBe(issuedTicket.id);
+    expect(recoveredTicket.order.customerName).toBe('Mostrador');
+    const [count] = await sql<
+      { count: number }[]
+    >`select count(*)::int as count from order_tickets where order_id=${orderId}`;
+    expect(count!.count).toBe(1);
   });
 
   it('no inventa costos para ingredientes sin compras', async () => {

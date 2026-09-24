@@ -37,6 +37,8 @@ import {
   type CashSessionState,
   type OrderPaymentCreate,
   type OrderRefundCreate,
+  orderTicketResponseSchema,
+  type TicketIssue,
 } from '@bj/contracts';
 import { z, type ZodType } from 'zod';
 
@@ -247,6 +249,10 @@ export class BjApiClient {
     );
   }
 
+  issueOrderTicket(id: string, input: TicketIssue) {
+    return this.post(`/operator/orders/${id}/ticket`, orderTicketResponseSchema, input);
+  }
+
   issueSpinCode(id: string, idempotencyKey = createIdempotencyKey()) {
     return this.post(`/operator/orders/${id}/spin-code`, spinCodeIssueResponseSchema, {
       idempotencyKey,
@@ -385,7 +391,11 @@ export class BjApiClient {
   }
 
   /** Reads an authenticated SSE stream until it closes or is aborted. */
-  async subscribeOrderEvents(onOrder: (orderId: string) => void, signal: AbortSignal) {
+  async subscribeOrderEvents(
+    onOrder: (orderId: string) => void,
+    signal: AbortSignal,
+    onConnected?: () => void,
+  ) {
     const response = await this.requestFetch(`${this.baseUrl}/operator/orders/stream`, {
       headers: await this.headers(),
       signal,
@@ -409,6 +419,10 @@ export class BjApiClient {
         for (const event of events) {
           const type = event.match(/^event:\s*(.+)$/m)?.[1];
           const data = event.match(/^data:\s*(.+)$/m)?.[1];
+          if (type === 'connected') {
+            onConnected?.();
+            continue;
+          }
           if (type !== 'order' || !data) continue;
           let rawPayload: unknown;
           try {

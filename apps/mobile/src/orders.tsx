@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { Share, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
-import type { Catalog, Order, OrderDraft, OrderStatus } from '@bj/contracts';
+import type { Catalog, Order, OrderDraft, OrderStatus, OrderTicket } from '@bj/contracts';
 import { api } from './api';
 import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
@@ -47,10 +49,16 @@ function useOrderStream(enabled: boolean) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const connect = async () => {
       try {
-        await api.subscribeOrderEvents((orderId) => {
-          void queryClient.invalidateQueries({ queryKey: ['orders'] });
-          void queryClient.invalidateQueries({ queryKey: ['order', orderId] });
-        }, controller.signal);
+        await api.subscribeOrderEvents(
+          (orderId) => {
+            void queryClient.invalidateQueries({ queryKey: ['orders'] });
+            void queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+          },
+          controller.signal,
+          () => {
+            void queryClient.invalidateQueries({ queryKey: ['orders'] });
+          },
+        );
         retry = 1_000;
       } catch (cause) {
         if (cause instanceof BjApiError && cause.unauthorized) return;
@@ -80,6 +88,37 @@ function StatusPill({ status }: { status: string }) {
       <Text style={styles.statusText}>{statusLabel(status)}</Text>
     </View>
   );
+}
+
+function htmlEscape(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character]!,
+  );
+}
+
+function ticketHtml(ticket: OrderTicket) {
+  const { order } = ticket;
+  const items = order.items
+    .map(
+      (item) =>
+        `<tr><td>${item.quantity} × ${htmlEscape(item.productName)}${item.note ? `<br><small>${htmlEscape(item.note)}</small>` : ''}</td><td>${money(item.lineTotalCents)}</td></tr>`,
+    )
+    .join('');
+  const payments = ticket.payments
+    .map(
+      (payment) =>
+        `<li>${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]}: ${money(payment.appliedCents)}</li>`,
+    )
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px Arial,sans-serif;color:#181818;padding:24px}h1{text-align:center;font-size:22px}p{text-align:center;color:#555}table{width:100%;border-collapse:collapse;margin:20px 0}td{padding:9px 0;border-bottom:1px solid #ddd}td:last-child{text-align:right;white-space:nowrap}.total{font-weight:bold;font-size:18px;text-align:right}small{color:#555}</style></head><body><h1>B&amp;J Burgers</h1><p>Ticket ${htmlEscape(ticket.id.slice(0, 8).toUpperCase())}<br>${new Date(ticket.issuedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p><p>${htmlEscape(order.customerName || 'Mostrador')} · ${htmlEscape(order.fulfillment)}</p><table>${items}</table><p class="total">Total ${money(order.totalCents)}</p><p>Pagos</p><ul>${payments}</ul><p>Gracias por tu compra</p></body></html>`;
 }
 
 function OrdersList({
@@ -214,8 +253,13 @@ export function OrderDetailPanel({
   const [message, setMessage] = useState<string | undefined>(undefined);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
   const [received, setReceived] = useState('');
+  const [refundPaymentId, setRefundPaymentId] = useState('');
+  const [refundAmount, setRefundAmount] = useState('');
+  const [refundReason, setRefundReason] = useState('');
   const paymentKey = useRef<string | undefined>(undefined);
+  const refundKey = useRef<{ request: string; key: string } | undefined>(undefined);
   const spinKey = useRef<string | undefined>(undefined);
+  const ticketKey = useRef<string | undefined>(undefined);
   const statusKey = useRef<{ status: OrderStatus; key: string } | undefined>(undefined);
   const change = useMutation({
     mutationFn: (status: OrderStatus) => {
@@ -276,6 +320,75 @@ export function OrderDetailPanel({
     await Clipboard.setStringAsync(code);
     await Share.share({ message: `Tu código de ruleta B&J: ${code}` });
   };
+  const shareTicket = async () => {
+    setMessage(undefined);
+    ticketKey.current ??= createIdempotencyKey();
+    try {
+      const { ticket } = await api.issueOrderTicket(orderId, {
+        idempotencyKey: ticketKey.current,
+      });
+      ticketKey.current = undefined;
+      const file = await Print.printToFileAsync({ html: ticketHtml(ticket) });
+      if (!(await Sharing.isAvailableAsync())) {
+        setMessage(`Ticket guardado en ${file.uri}`);
+        return;
+      }
+      await Sharing.shareAsync(file.uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Compartir ticket B&J',
+        UTI: 'com.adobe.pdf',
+      });
+      setMessage('Ticket PDF generado desde los datos confirmados.');
+    } catch (cause) {
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo generar el ticket. Reintenta para recuperar el mismo ticket.',
+      );
+    }
+  };
+  const refundPayment = async () => {
+    if (!order) return;
+    const amountCents = centsFromInput(refundAmount);
+    const payment = order.payments.find((item) => item.id === refundPaymentId);
+    if (
+      !payment ||
+      amountCents <= 0 ||
+      amountCents > payment.refundableCents ||
+      !refundReason.trim()
+    ) {
+      setMessage('Selecciona un pago, indica un importe disponible y escribe el motivo.');
+      return;
+    }
+    const request = JSON.stringify({
+      paymentId: payment.id,
+      amountCents,
+      reason: refundReason.trim(),
+    });
+    if (refundKey.current?.request !== request)
+      refundKey.current = { request, key: createIdempotencyKey() };
+    setMessage(undefined);
+    try {
+      await api.refundOrderPayment(orderId, {
+        idempotencyKey: refundKey.current.key,
+        paymentId: payment.id,
+        amountCents,
+        reason: refundReason.trim(),
+      });
+      refundKey.current = undefined;
+      setRefundAmount('');
+      setRefundReason('');
+      setMessage('Devolución registrada. La caja y el saldo fueron actualizados.');
+      await queryClient.invalidateQueries({ queryKey: ['orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+    } catch (cause) {
+      setMessage(
+        cause instanceof BjApiError
+          ? cause.message
+          : 'No se pudo registrar la devolución. Reintenta la misma solicitud.',
+      );
+    }
+  };
   if (isLoading) return <Loading label="Cargando comanda…" />;
   if (!order)
     return (
@@ -328,6 +441,31 @@ export function OrderDetailPanel({
           <Text style={shared.subtitle}>Pago completo confirmado.</Text>
         )}
       </Card>
+      {order.payments.some((payment) => payment.refundableCents > 0) ? (
+        <Card>
+          <Text style={shared.label}>Devoluciones</Text>
+          <View style={styles.paymentRow}>
+            {order.payments
+              .filter((payment) => payment.refundableCents > 0)
+              .map((payment) => (
+                <Pill
+                  key={payment.id}
+                  label={`${{ cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia' }[payment.method]} · ${money(payment.refundableCents)} disponibles`}
+                  selected={refundPaymentId === payment.id}
+                  onPress={() => setRefundPaymentId(payment.id)}
+                />
+              ))}
+          </View>
+          <Field
+            label="Importe a devolver (MXN)"
+            keyboardType="decimal-pad"
+            value={refundAmount}
+            onChangeText={setRefundAmount}
+          />
+          <Field label="Motivo" value={refundReason} onChangeText={setRefundReason} />
+          <Button label="Registrar devolución" secondary onPress={() => void refundPayment()} />
+        </Card>
+      ) : null}
       <Card>
         {order.items.map((item) => (
           <View key={item.id} style={styles.item}>
@@ -375,6 +513,11 @@ export function OrderDetailPanel({
       ) : null}
       {order.status === 'delivered' ? (
         <>
+          <Button
+            label="Generar y compartir ticket PDF"
+            secondary
+            onPress={() => void shareTicket()}
+          />
           <Button
             label={order.spinCodeIssued ? 'Recuperar código de ruleta' : 'Emitir código de ruleta'}
             secondary
