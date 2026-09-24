@@ -24,20 +24,22 @@ Guía para el local y ensayo seguro de despliegue. Todas las cantidades se expre
 
 ## Ensayo de respaldo y restauración
 
-Ejecuta estos comandos con PostgreSQL Client Tools instalado y credenciales disponibles en la sesión segura del operador. Usa una base de ensayo aislada; no apuntes los comandos de restauración a producción.
+El check `Quality and Android bundle` ejecuta un ensayo automático con PostgreSQL 17 y datos sintéticos: genera un `pg_dump`, restaura en una base temporal única y compara conteos de todas las tablas públicas más saldos de inventario, comandas, pagos y reembolsos. El script sólo acepta una URL local cuyo nombre termina en `_test`; nunca apunta a producción. Esta prueba protege el procedimiento, pero no sustituye el ensayo operacional con una copia aislada del local.
+
+Antes de habilitar `pos_cutover`, el responsable de infraestructura debe tomar una copia de la base real siguiendo la política vigente de respaldos, restaurarla en una instancia aislada con la misma versión mayor de PostgreSQL y validar lecturas de API, migraciones, catálogo, existencias y saldos. Registrar fecha, commit, versión de PostgreSQL, identificador de copia, resultados y duración. No guardar credenciales ni datos personales en la evidencia del PR. No restaurar sobre producción ni sobre una instancia que haya recibido operaciones posteriores.
+
+Para una prueba manual, usa credenciales obtenidas por el canal seguro del operador y una instancia/base desechable que no contenga información de clientes. Define `POS_REHEARSAL_SOURCE_URL` sólo con la URL de esa base de ensayo local terminada en `_test`, y ejecuta `bash scripts/rehearse-postgres-restore.sh` desde Bash con Docker disponible. El ensayo crea una base con nombre aleatorio y la elimina al terminar; el respaldo y los resultados permanecen en `POS_REHEARSAL_ARTIFACT_DIR` para revisar y luego borrar de forma segura.
 
 ```powershell
-$backupFile = Join-Path $env:TEMP "bj-pos-rehearsal-$(Get-Date -Format yyyyMMdd-HHmmss).dump"
-pg_dump --format=custom --no-owner --file $backupFile $env:DATABASE_URL
-pg_restore --list $backupFile | Select-Object -First 20
-createdb bj_pos_restore_rehearsal
-pg_restore --no-owner --dbname bj_pos_restore_rehearsal $backupFile
+$env:POS_REHEARSAL_SOURCE_URL = 'postgres://usuario:clave@localhost:5432/bj_pos_rehearsal_test'
+$env:POS_REHEARSAL_ARTIFACT_DIR = Join-Path $env:TEMP 'bj-pos-backup-rehearsal'
+bash scripts/rehearse-postgres-restore.sh
 ```
 
-En la base restaurada, valida que las migraciones estén completas, el catálogo y las capacidades coincidan con la copia, y que inventario, compras, comandas, pagos, reembolsos, turnos, gastos y tickets tengan los mismos totales que antes del respaldo. Luego ejecuta las pruebas contra esa base aislada. Registra fecha, commit, versión de PostgreSQL, nombre de la copia, resultados y duración. El ensayo queda aprobado sólo cuando la API puede consultar la base restaurada y los conteos y saldos conciliados coinciden.
-
-Al terminar, elimina exclusivamente la base aislada `bj_pos_restore_rehearsal` y el archivo temporal de ese ensayo después de guardar su evidencia. Nunca automatices una restauración destructiva sobre producción.
+El ensayo queda aprobado sólo cuando la restauración termina sin errores y los conteos y saldos coinciden. El directorio de artefactos contiene una copia de respaldo completa; restringe su acceso y elimínalo al concluir la revisión.
 
 ## Entrega Android
 
 La aplicación mantiene el identificador `com.bjburgers.operacion` y debe firmarse con la clave original configurada en los secretos del workflow de release. Incrementa `expo.version` y `expo.android.versionCode` mediante el cambio revisado de entrega. Si faltan la clave o los secretos originales, registra el bloqueo; no generes otra clave ni cambies el identificador para forzar una actualización.
+
+El check `Quality and Android bundle` verifica que Expo genere el bundle Android; no ejecuta la app en un teléfono/tablet ni produce una actualización firmada. Antes de activar el POS en dispositivos, completa y registra recorridos de vender, comandas, inventario/producción, caja, reportes, pérdida de conexión/reintento y sincronización con un segundo equipo en Android real o emulador. El workflow manual `Android release` requiere el entorno `production` y la llave original en los cuatro secretos que indica el workflow.
