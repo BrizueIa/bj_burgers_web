@@ -695,12 +695,15 @@ th {
     top: 0;
     padding: 0.55rem;
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'brand logout' 'navigation navigation';
     align-items: center;
   }
   .brand {
+    grid-area: brand;
     border: 0;
     padding: 0;
+    justify-content: flex-start;
   }
   .brand-mark {
     width: 40px;
@@ -711,15 +714,27 @@ th {
     display: none;
   }
   nav {
+    grid-area: navigation;
     display: flex;
-    justify-content: center;
-    margin: 0;
-    gap: 0.1rem;
+    min-width: 0;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    margin: 0.35rem 0 0;
+    gap: 0.15rem;
+    -webkit-overflow-scrolling: touch;
   }
   nav button {
-    padding: 0.6rem;
+    flex: 0 0 auto;
+    gap: 0.4rem;
+    padding: 0.55rem 0.65rem;
+    font-size: 0.72rem;
+    white-space: nowrap;
   }
   .logout {
+    grid-area: logout;
+    width: auto;
     margin: 0;
     border: 0;
     padding: 0.6rem;
