@@ -1,4 +1,4 @@
-import { BusinessPage } from '@/src/business';
+import { OrderBuilder } from '@/src/orders';
 export default function PosScreen() {
-  return <BusinessPage section="pos" />;
+  return <OrderBuilder />;
 }
