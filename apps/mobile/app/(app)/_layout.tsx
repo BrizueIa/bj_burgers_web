@@ -59,6 +59,7 @@ export default function AppLayout() {
       </View>
       {tablet ? null : (
         <ScrollView
+          style={styles.bottomNavFrame}
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.bottomScroll}
@@ -81,8 +82,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panel,
   },
   brand: { color: colors.gold, fontWeight: '800', fontSize: 18, marginBottom: 12 },
-  bottomNav: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
-  bottomScroll: { backgroundColor: colors.panel, borderTopWidth: 1, borderTopColor: colors.border },
+  bottomNavFrame: { flexGrow: 0, flexShrink: 0, height: 72 },
+  bottomNav: {
+    height: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  bottomScroll: {
+    minHeight: 72,
+    alignItems: 'center',
+    backgroundColor: colors.panel,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
   offline: { backgroundColor: '#5b3d10' },
   offlineText: {
     color: colors.text,

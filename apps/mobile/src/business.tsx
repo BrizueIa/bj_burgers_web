@@ -6,6 +6,7 @@ import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type { UnifiedOrderConfirm } from '@bj/contracts';
 import type { BusinessState } from '@bj/contracts';
 import { api } from './api';
+import { businessLoadErrorMessage } from './business-error';
 import { centsFromInput, money, numberValue, quantity, startOfToday } from './format';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
@@ -90,7 +91,7 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       <ScrollScreen>
         <SectionTitle title={titles[section]} />
         <Notice kind="error">
-          {error instanceof BjApiError ? error.message : 'No se pudo consultar el negocio.'}
+          {businessLoadErrorMessage(error, 'No se pudo consultar el negocio.')}
         </Notice>
         <Button label="Reintentar" onPress={() => void refetch()} />
       </ScrollScreen>
@@ -398,7 +399,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     return (
       <ScrollScreen>
         <Notice kind="error">
-          {error instanceof BjApiError ? error.message : 'No se pudo cargar el negocio.'}
+          {businessLoadErrorMessage(error, 'No se pudo cargar el negocio.')}
         </Notice>
       </ScrollScreen>
     );
