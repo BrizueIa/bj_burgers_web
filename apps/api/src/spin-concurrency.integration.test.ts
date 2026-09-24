@@ -66,6 +66,7 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0016_admin_order_actors.sql',
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
+      '0019_menu_catalog_corrections.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into categories(id,slug,name)
