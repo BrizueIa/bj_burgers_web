@@ -119,6 +119,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0016_admin_order_actors.sql',
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
+      '0019_menu_catalog_corrections.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -156,6 +157,69 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   });
   afterAll(async () => {
     await pg?.close();
+  });
+
+  it('alinea el catálogo existente al menú confirmado y puede repetirse sin duplicados', async () => {
+    await pg.exec(
+      "insert into categories(id,slug,name) values ('dogs','dogs','Hot dogs'),('sides','sides','Complementos'),('drinks','drinks','Bebidas') on conflict (id) do nothing",
+    );
+    await pg.exec(
+      "insert into products(id,slug,category_id,name,description,price_cents,ingredients) values ('hawaiana','hawaiana','burgers','Hawaiana','',8900,'[\"Mayonesa\"]'),('coca-cola','coca-cola','drinks','Coca-Cola','',3600,'[]'),('coca-cola-zero','coca-cola-zero','drinks','Coca-Cola Zero','',3100,'[]') on conflict (id) do nothing",
+    );
+    await pg.exec(
+      "insert into modifiers(id,group_id,name,price_cents) values('extra-papas-150','extras','Papas 150 g',1600) on conflict (id) do nothing",
+    );
+    const migration = await readFile(
+      new URL('../migrations/0019_menu_catalog_corrections.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(migration);
+    await pg.exec(migration);
+
+    const products = await pg.query<{
+      id: string;
+      price_cents: number;
+      ingredients: string[];
+    }>(
+      "select id,price_cents,ingredients from products where id in ('aros-100','hawaiana','coca-cola','coca-cola-zero') order by id",
+    );
+    expect(products.rows).toEqual([
+      { id: 'aros-100', price_cents: 2600, ingredients: ['Aros de cebolla'] },
+      {
+        id: 'coca-cola',
+        price_cents: 3900,
+        ingredients: [],
+      },
+      {
+        id: 'coca-cola-zero',
+        price_cents: 3600,
+        ingredients: [],
+      },
+      {
+        id: 'hawaiana',
+        price_cents: 8900,
+        ingredients: [
+          'Mayonesa',
+          'Mostaza',
+          'Catsup',
+          'Lechuga',
+          'Tomate',
+          'Cebolla',
+          'Carne Angus',
+          'Queso americano',
+          'Piña asada',
+          'Queso asadero',
+          'Jamón',
+        ],
+      },
+    ]);
+    const modifiers = await pg.query<{ name: string; price_cents: number }>(
+      "select name,price_cents from modifiers where id = 'extra-papas-150'",
+    );
+    expect(modifiers.rows).toEqual([{ name: 'Papas 100 g', price_cents: 1600 }]);
+    await pg.exec(
+      "delete from products where id in ('aros-100','hawaiana','coca-cola','coca-cola-zero'); delete from modifiers where id='extra-papas-150'; delete from categories where id in ('dogs','sides','drinks')",
+    );
   });
 
   it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
