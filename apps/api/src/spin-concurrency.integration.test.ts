@@ -68,6 +68,12 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0018_manual_order_discounts.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
+    await database.sql`insert into categories(id,slug,name)
+      values('integration-tests','integration-tests','Pruebas de integración')
+      on conflict (id) do nothing`;
+    await database.sql`insert into products(id,slug,category_id,name,description,price_cents)
+      values('burger','burger','integration-tests','Burger de prueba','',5000)
+      on conflict (id) do nothing`;
     const [legacy] = await database.sql<
       {
         stock: string;
