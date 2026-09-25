@@ -9,10 +9,21 @@
     "android": {
       "package": "com.bjburgers.operacion",
       "versionCode": 3,
-      "adaptiveIcon": { "backgroundColor": "#0a0d0b" }
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0d0b"
+      }
     },
-    "plugins": ["expo-router", "expo-secure-store", "./plugins/with-android-signing"],
-    "experiments": { "typedRoutes": true },
-    "extra": { "apiBaseUrl": "https://bj-40-233-29-16.sslip.io/api/v1" }
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "./plugins/with-android-signing",
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiBaseUrl": "https://bj-40-233-29-16.sslip.io/api/v1"
+    }
   }
 }
