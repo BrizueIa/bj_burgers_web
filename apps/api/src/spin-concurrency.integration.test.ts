@@ -67,8 +67,18 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
       '0019_menu_catalog_corrections.sql',
+      '0020_mobile_pos_operability.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
+    const [mobileDefaults] = await database.sql<{ ingredients: number; cash_enabled: boolean }[]>`
+      select count(*) filter(where name in (
+        'Aderezo B&J','Aros de cebolla','Carne Angus','Catsup','Cebolla','Cebolla caramelizada',
+        'Jamón','Jalapeño','Lechuga','Mayonesa','Mostaza','Papas','Piña asada','Queso americano',
+        'Queso asadero','Queso Philadelphia','Salchicha premium','Salchichón','Salsa BBQ','Tomate','Tocino'
+      ) and stock=0 and last_cost is null)::int as ingredients,
+      (select enabled from pos_capabilities where capability='cash_sessions') as cash_enabled
+      from stock_ingredients`;
+    expect(mobileDefaults).toEqual({ ingredients: 21, cash_enabled: true });
     await database.sql`insert into categories(id,slug,name)
       values('integration-tests','integration-tests','Pruebas de integración')
       on conflict (id) do nothing`;
@@ -201,12 +211,18 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
         (select count(*)::int from operation_audit_logs where entity='foundation-test') as effects,
         (select count(*)::int from idempotency_operations where idempotency_key=${idempotencyKey}) as operations`;
     expect(rows[0]).toEqual({ effects: 1, operations: 1 });
-    expect((await getCapabilities(database.sql)).every((capability) => !capability.enabled)).toBe(
-      true,
+    const capabilities = await getCapabilities(database.sql);
+    expect(capabilities.find((capability) => capability.key === 'pos_cutover')?.enabled).toBe(
+      false,
     );
+    expect(
+      capabilities
+        .filter((capability) => capability.key !== 'pos_cutover')
+        .every((capability) => capability.enabled),
+    ).toBe(true);
   });
 
-  it('dos conexiones no pueden reservar la última existencia disponible', async () => {
+  it('permite reservas concurrentes por debajo de cero sin alterar existencias físicas', async () => {
     const deviceId = randomUUID();
     const ingredientId = randomUUID();
     await database.sql`insert into mobile_devices(id,name) values(${deviceId}, 'Inventario concurrente')`;
@@ -229,12 +245,12 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
         ),
       ),
     );
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
     const [balance] = await database.sql<{ stock: string; reserved: string; active: number }[]>`
       select i.stock::text, i.reserved::text,
         (select count(*)::int from stock_reservations where ingredient_id=i.id and status='active') as active
       from stock_ingredients i where i.id=${ingredientId}`;
-    expect(balance).toEqual({ stock: '1.000', reserved: '1.000', active: 1 });
+    expect(balance).toEqual({ stock: '1.000', reserved: '2.000', active: 2 });
   });
 
   it('dos conexiones no pueden abrir turnos de caja simultáneos', async () => {

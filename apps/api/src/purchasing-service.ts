@@ -91,15 +91,29 @@ export async function createPurchase(sql: Sql, input: PurchaseCreate, actor: Aut
         const baseQty = decimal(product / 1000n);
         const value = line.grossCents - discount + acquisitionCost;
         const updated = await tx<
-          { stock: string; value_cents: string }[]
-        >`update stock_ingredients set stock=stock+${baseQty},value_cents=value_cents+${value},last_cost=${value}::numeric/${baseQty}::numeric where id=${line.ingredientId} returning stock::text,value_cents::text`;
-        await tx`insert into purchase_lines(purchase_id,ingredient_id,presentation_id,presentation_quantity,applied_base_quantity,gross_cents,allocated_discount_cents,allocated_acquisition_cents,inventory_value_cents)
-        values(${document.id},${line.ingredientId},${line.presentationId},${line.presentationQuantity},${baseQty},${line.grossCents},${discount},${acquisitionCost},${value})`;
+          {
+            stock: string;
+            value_cents: string;
+            inventory_delta: string;
+            previous_last_cost: string | null;
+          }[]
+        >`with before as (
+          select stock,value_cents,last_cost from stock_ingredients where id=${line.ingredientId} for update
+        ) update stock_ingredients i set stock=b.stock+${baseQty},
+          value_cents=case when b.stock<0
+            then greatest(0,b.stock+${baseQty})*(${value}::numeric/${baseQty}::numeric)
+            else b.value_cents+${value} end,
+          last_cost=${value}::numeric/${baseQty}::numeric
+          from before b where i.id=${line.ingredientId}
+          returning i.stock::text,i.value_cents::text,(i.value_cents-b.value_cents)::text as inventory_delta,b.last_cost::text as previous_last_cost`;
+        const inventoryValueCents = Math.max(0, Math.round(Number(updated[0]!.inventory_delta)));
+        await tx`insert into purchase_lines(purchase_id,ingredient_id,presentation_id,presentation_quantity,applied_base_quantity,gross_cents,allocated_discount_cents,allocated_acquisition_cents,inventory_value_cents,previous_last_cost,last_cost_snapshot)
+        values(${document.id},${line.ingredientId},${line.presentationId},${line.presentationQuantity},${baseQty},${line.grossCents},${discount},${acquisitionCost},${inventoryValueCents},${updated[0]!.previous_last_cost},true)`;
         await appendMovement(tx as unknown as Sql, {
           ingredientId: line.ingredientId,
           type: 'purchase',
           quantityDelta: baseQty,
-          valueDeltaCents: String(value),
+          valueDeltaCents: updated[0]!.inventory_delta,
           stockAfter: updated[0]!.stock,
           valueAfterCents: updated[0]!.value_cents,
           reason: `Compra ${input.reference || document.id}`,
@@ -113,7 +127,7 @@ export async function createPurchase(sql: Sql, input: PurchaseCreate, actor: Aut
           appliedBaseQuantity: baseQty,
           allocatedDiscountCents: discount,
           allocatedAcquisitionCents: acquisitionCost,
-          inventoryValueCents: value,
+          inventoryValueCents,
         });
       }
       await auditOperation(tx as unknown as Sql, actor, {
@@ -150,8 +164,14 @@ export async function reversePurchase(
       if (doc.status !== 'confirmed')
         throw new PosFoundationError(409, 'La compra ya fue revertida.');
       const lines = await tx<
-        { ingredient_id: string; applied_base_quantity: string; inventory_value_cents: number }[]
-      >`select ingredient_id,applied_base_quantity::text,inventory_value_cents from purchase_lines where purchase_id=${purchaseId} order by id`;
+        {
+          ingredient_id: string;
+          applied_base_quantity: string;
+          inventory_value_cents: number;
+          previous_last_cost: string | null;
+          last_cost_snapshot: boolean;
+        }[]
+      >`select ingredient_id,applied_base_quantity::text,inventory_value_cents,previous_last_cost::text,last_cost_snapshot from purchase_lines where purchase_id=${purchaseId} order by id`;
       await tx`select id from stock_ingredients where id=any(${lines.map((line) => line.ingredient_id)}) order by id for update`;
       for (const line of lines) {
         const later =
@@ -163,12 +183,13 @@ export async function reversePurchase(
           );
         const rows = await tx<
           { stock: string; value_cents: string }[]
-        >`update stock_ingredients set stock=stock-${line.applied_base_quantity},value_cents=value_cents-${line.inventory_value_cents} where id=${line.ingredient_id} and stock-reserved>=${line.applied_base_quantity} returning stock::text,value_cents::text`;
+        >`update stock_ingredients set stock=stock-${line.applied_base_quantity},
+          value_cents=case when stock-${line.applied_base_quantity}<=0 then 0
+            else greatest(0,value_cents-${line.inventory_value_cents}) end,
+          last_cost=case when ${line.last_cost_snapshot} then ${line.previous_last_cost}::numeric else last_cost end
+          where id=${line.ingredient_id} returning stock::text,value_cents::text`;
         if (!rows[0])
-          throw new PosFoundationError(
-            409,
-            'No se puede revertir: la existencia disponible ya no alcanza.',
-          );
+          throw new PosFoundationError(404, 'El ingrediente de la compra ya no existe.');
         await appendMovement(tx as unknown as Sql, {
           ingredientId: line.ingredient_id,
           type: 'adjustment',

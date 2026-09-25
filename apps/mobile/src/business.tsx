@@ -28,6 +28,15 @@ function dayWindow() {
   to.setDate(to.getDate() + 1);
   return { from, to };
 }
+function localDate(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+function inclusiveDateRange(range: { from: Date; to: Date }) {
+  const last = new Date(range.to);
+  if (last.getHours() === 0 && last.getMinutes() === 0 && last.getSeconds() === 0)
+    last.setDate(last.getDate() - 1);
+  return { from: localDate(range.from), to: localDate(last) };
+}
 function windowFor(days: number) {
   const to = new Date();
   const from = new Date(to);
@@ -85,6 +94,15 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
     queryFn: () => api.capabilities(),
     staleTime: 60_000,
   });
+  const profitabilityEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'profitability_reports' && capability.enabled,
+  );
+  const dates = inclusiveDateRange(range);
+  const dashboardReport = useQuery({
+    queryKey: ['dashboard-profitability', dates.from, dates.to],
+    queryFn: () => api.profitabilityReport(dates.from, dates.to, 1),
+    enabled: section === 'home' && profitabilityEnabled === true,
+  });
   if (isLoading) return <Loading />;
   if (!data)
     return (
@@ -97,10 +115,12 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       </ScrollScreen>
     );
   const report = data.report;
-  const revenue = numberValue(report.revenue_cents);
-  const cost = numberValue(report.cost_cents);
-  const expenses = numberValue(report.expenses_cents);
-  const waste = numberValue(report.waste_cents);
+  const unifiedReport = dashboardReport.data?.summary;
+  const revenue = unifiedReport?.grossSalesCents ?? numberValue(report.revenue_cents);
+  const cost = unifiedReport?.costOfGoodsSoldCents ?? numberValue(report.cost_cents);
+  const expenses = unifiedReport?.operatingExpensesCents ?? numberValue(report.expenses_cents);
+  const waste = unifiedReport?.wasteCents ?? numberValue(report.waste_cents);
+  const salesCount = unifiedReport?.deliveredOrders ?? report.sales_count;
   const lowStock = data.ingredients.filter(
     (ingredient) => numberValue(ingredient.stock) <= numberValue(ingredient.minimum),
   ).length;
@@ -127,7 +147,10 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             label={isFetching ? 'Actualizando…' : 'Actualizar'}
             secondary
             disabled={isFetching}
-            onPress={() => void refetch()}
+            onPress={() => {
+              void refetch();
+              if (section === 'home' && profitabilityEnabled) void dashboardReport.refetch();
+            }}
           />
         }
       />
@@ -139,7 +162,7 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           <Metric
             label="Ventas cobradas"
             value={money(revenue)}
-            detail={`${report.sales_count} ventas`}
+            detail={`${salesCount} ventas entregadas`}
           />
           <Metric label="Costo de ventas" value={money(cost)} />
           <Metric
@@ -151,7 +174,7 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           />
           <Metric
             label="Resultado registrado"
-            value={money(revenue - cost - expenses - waste)}
+            value={money(unifiedReport?.operatingResultCents ?? revenue - cost - expenses - waste)}
             detail="Después de gastos y mermas"
           />
         </View>
@@ -159,7 +182,7 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       {section === 'home' ? (
         <>
           <View style={styles.actions}>
-            <Button label="Nueva venta" onPress={() => openEditor('sale')} />
+            <Button label="Nueva venta · POS" onPress={() => router.push('/(app)/pos')} />
             <Button label="Registrar compra" secondary onPress={() => openEditor('purchase')} />
             <Button label="Comandas" secondary onPress={() => router.push('/(app)/orders')} />
             <Button label="Registrar gasto" secondary onPress={() => openEditor('expense')} />
@@ -171,6 +194,12 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               pendientes de costear
             </Text>
           </Card>
+          {dashboardReport.error ? (
+            <Notice kind="warning">
+              No se pudo actualizar el resumen del POS; las cifras mostradas pueden incluir solo los
+              registros anteriores.
+            </Notice>
+          ) : null}
           <Notice>
             {unifiedOrdersEnabled
               ? 'Las ventas nuevas se cotizan y reservan como comandas únicas. El cobro se integra desde Caja.'
@@ -180,20 +209,14 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       ) : null}
       {section === 'pos' ? (
         <>
-          {!unifiedOrdersEnabled ? (
-            <Notice kind="warning">
-              El POS unificado aún no está habilitado por el servidor. Las operaciones confirmadas
-              seguirán el circuito disponible hasta que se complete la conciliación.
-            </Notice>
-          ) : null}
           <Text style={shared.subtitle}>
-            {unifiedOrdersEnabled
-              ? 'Cotiza y crea una sola comanda para mostrador, recoger o domicilio. Preparación y entrega se controlan desde Comandas.'
-              : 'Ventas de mostrador con precio de lista y consumo de receta. Las comandas actuales no registran todavía el cobro.'}
+            Cotiza y registra ventas desde el carrito del POS. Preparación, pago y entrega se
+            consultan desde Comandas y Caja.
           </Text>
           <Button
-            label={unifiedOrdersEnabled ? 'Nueva comanda' : 'Cobrar venta'}
-            onPress={() => openEditor('sale')}
+            label="Abrir POS · Nueva venta"
+            disabled={!unifiedOrdersEnabled}
+            onPress={() => router.push('/(app)/pos')}
           />
           <Button label="Ver comandas" secondary onPress={() => router.push('/(app)/orders')} />
           {data.products.map((product) => (
@@ -280,7 +303,11 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               </Text>
               <Text style={styles.price}>Lista {money(product.price_cents)}</Text>
               <Button
-                label="Editar receta y precio"
+                label={
+                  data.recipes.some((line) => line.product_id === product.id)
+                    ? 'Editar receta y precio'
+                    : 'Crear receta'
+                }
                 secondary
                 onPress={() => openEditor('recipe', product.id)}
               />
@@ -371,6 +398,9 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const product = data?.products.find((item) => item.id === productId);
+  const hasExistingRecipe = Boolean(
+    product && data?.recipes.some((line) => line.product_id === product.id),
+  );
   const recipeVersionsEnabled = capabilities.data?.some(
     (capability) => capability.key === 'recipe_versions' && capability.enabled,
   );
@@ -410,7 +440,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const addLine = () => {
     setMessage(undefined);
     const quantityValue = Number(lineQuantity.replace(',', '.'));
-    if (!selected || !Number.isFinite(quantityValue) || quantityValue <= 0) {
+    if (!selected || !Number.isFinite(quantityValue) || (mode !== 'count' && quantityValue <= 0)) {
       setMessage('Selecciona un artículo y escribe una cantidad válida.');
       return;
     }
@@ -592,6 +622,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
             productId: input.productId as string,
             targetMargin: input.targetMargin as number,
             overheadCents: input.overheadCents as number,
+            priceCents: input.priceCents as number,
             components: (input.lines as Array<{ ingredientId: string; quantity: number }>).map(
               (line) => ({
                 kind: 'ingredient' as const,
@@ -641,16 +672,22 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const heading = {
     ingredient: 'Nuevo ingrediente',
     purchase: 'Registrar compra',
-    sale: 'Cobrar venta',
+    sale: 'Registrar venta',
     waste: 'Registrar merma',
     count: 'Registrar conteo',
     expense: 'Registrar gasto',
-    recipe: `Receta · ${product?.name ?? ''}`,
+    recipe: `${hasExistingRecipe ? 'Editar receta' : 'Crear receta'} · ${product?.name ?? ''}`,
     production: `Lote · ${product?.name ?? ''}`,
   }[mode];
   return (
     <ScrollScreen>
       <SectionTitle title={heading} />
+      {mode === 'recipe' && !hasExistingRecipe ? (
+        <Notice>
+          Agrega los ingredientes y cantidades por producto. Los ingredientes del menú ya están
+          registrados con existencia en cero; captura una compra para registrar su costo real.
+        </Notice>
+      ) : null}
       <Text style={shared.subtitle}>
         {mode === 'sale'
           ? unifiedOrdersEnabled
@@ -788,8 +825,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         <>
           {recipeVersionsEnabled ? (
             <Notice>
-              La receta se guardará como una nueva versión. El precio de lista no se cambia desde
-              esta operación.
+              La receta se guardará como una nueva versión y actualizará el costo y el precio de
+              lista del producto.
             </Notice>
           ) : null}
           <Field
@@ -863,8 +900,14 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
             ))}
           </ScrollView>
           <Field
-            label={mode === 'sale' ? 'Cantidad de productos' : 'Cantidad en unidad base'}
-            keyboardType="decimal-pad"
+            label={
+              mode === 'sale'
+                ? 'Cantidad de productos'
+                : mode === 'count'
+                  ? 'Existencia contada (puede ser negativa)'
+                  : 'Cantidad en unidad base'
+            }
+            keyboardType={mode === 'count' ? 'default' : 'decimal-pad'}
             value={lineQuantity}
             onChangeText={setLineQuantity}
           />

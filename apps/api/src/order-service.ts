@@ -581,7 +581,7 @@ async function createOrderInTransaction(
       const [reservation] = await tx<{ id: string }[]>`
         with updated as (
           update stock_ingredients set reserved=reserved+${need.quantity}::numeric
-          where id=${need.ingredientId} and stock-reserved>=${need.quantity}::numeric returning id
+          where id=${need.ingredientId} returning id
         ) insert into stock_reservations(ingredient_id,quantity,status,reference_type,reference_id,reason,created_by_device_id,created_by_user_id)
         select id,${need.quantity}::numeric,'active','unified_order',${orderId},'Reserva de comanda unificada',${actorIds.deviceId},${actorIds.userId} from updated returning id`;
       if (!reservation)
@@ -778,13 +778,20 @@ export async function updateOrderStatusInTransaction(
     if (!reservations.length) throw new OrderError(409, 'La comanda no tiene reservas activas.');
     for (const reservation of reservations) {
       const [consumed] = await tx<{ stock: string; value_cents: string; cost: string }[]>`
-        with before as (select stock,reserved,value_cents from stock_ingredients where id=${reservation.ingredient_id})
+        with before as (select stock,reserved,value_cents,last_cost from stock_ingredients where id=${reservation.ingredient_id} for update)
         update stock_ingredients i set stock=b.stock-${reservation.quantity}::numeric,
           reserved=b.reserved-${reservation.quantity}::numeric,
-          value_cents=case when b.stock=${reservation.quantity}::numeric then 0 else b.value_cents-(b.value_cents/b.stock)*${reservation.quantity}::numeric end
-        from before b where i.id=${reservation.ingredient_id} and b.stock>=${reservation.quantity}::numeric and b.reserved>=${reservation.quantity}::numeric
-        returning i.stock::text,i.value_cents::text,(b.value_cents/b.stock*${reservation.quantity}::numeric)::text as cost`;
-      if (!consumed) throw new OrderError(409, 'La reserva ya no coincide con el inventario.');
+          value_cents=case when b.stock<=${reservation.quantity}::numeric then 0 else b.value_cents-(b.value_cents/b.stock)*${reservation.quantity}::numeric end
+        from before b where i.id=${reservation.ingredient_id} and b.reserved>=${reservation.quantity}::numeric
+          and (b.last_cost is not null or (b.stock>0 and b.stock>=${reservation.quantity}::numeric))
+        returning i.stock::text,i.value_cents::text,
+          (least(greatest(b.stock,0),${reservation.quantity}::numeric)*case when b.stock>0 then b.value_cents/b.stock else 0 end
+            + greatest(0,${reservation.quantity}::numeric-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as cost`;
+      if (!consumed)
+        throw new OrderError(
+          409,
+          'No se puede valorar el consumo. Registra una compra o un costo inicial antes de preparar.',
+        );
       await tx`update stock_reservations set status='consumed',resolved_at=now() where id=${reservation.reservation_id}`;
       await tx`insert into order_cost_allocations(order_id,reservation_id,ingredient_id,cost_cents)
         values(${orderId},${reservation.reservation_id},${reservation.ingredient_id},${consumed.cost}::numeric)`;

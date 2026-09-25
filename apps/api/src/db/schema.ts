@@ -380,6 +380,8 @@ export const purchaseLines = pgTable('purchase_lines', {
   allocatedDiscountCents: integer('allocated_discount_cents').notNull(),
   allocatedAcquisitionCents: integer('allocated_acquisition_cents').notNull(),
   inventoryValueCents: integer('inventory_value_cents').notNull(),
+  previousLastCost: numeric('previous_last_cost', { precision: 20, scale: 6 }),
+  lastCostSnapshot: boolean('last_cost_snapshot').notNull().default(false),
 });
 export const purchaseReversals = pgTable('purchase_reversals', {
   id: uuid('id').primaryKey().defaultRandom(),

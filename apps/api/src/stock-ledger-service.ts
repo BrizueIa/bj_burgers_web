@@ -22,8 +22,10 @@ type InventoryRow = {
 
 const asText = (value: string | number) => String(value);
 const asScaled = (value: string | number) => {
-  const [whole = '0', fraction = ''] = String(value).split('.');
-  return BigInt(whole) * 1000n + BigInt((fraction + '000').slice(0, 3));
+  const raw = String(value);
+  const sign = raw.startsWith('-') ? -1n : 1n;
+  const [whole = '0', fraction = ''] = raw.replace(/^-/, '').split('.');
+  return sign * (BigInt(whole) * 1000n + BigInt((fraction + '000').slice(0, 3)));
 };
 const scaledToDecimal = (value: bigint) => {
   const sign = value < 0n ? '-' : '';
@@ -110,10 +112,9 @@ export async function reserveStock(
       const rows = await tx<InventoryRow[]>`
         update stock_ingredients
         set reserved=reserved+${input.quantity}
-        where id=${input.ingredientId} and stock-reserved>=${input.quantity}
+        where id=${input.ingredientId}
         returning id,name,unit,stock,reserved,value_cents,minimum,last_cost`;
-      if (!rows[0])
-        throw new PosFoundationError(409, 'No hay existencia disponible para realizar la reserva.');
+      if (!rows[0]) throw new PosFoundationError(404, 'El ingrediente no existe.');
       const reservations = await tx<{ id: string; quantity: string | number; status: string }[]>`
         insert into stock_reservations
           (ingredient_id,quantity,status,reference_type,reference_id,reason,created_by_device_id,created_by_user_id)
@@ -209,7 +210,7 @@ export async function countStock(sql: Sql, input: StockCountRequest, actor: Auth
           409,
           'El conteo coincide con la existencia actual; no hay ajuste que registrar.',
         );
-      if (target > current && !input.unitCostCents && before.last_cost === null)
+      if (target > 0n && target > current && !input.unitCostCents && before.last_cost === null)
         throw new PosFoundationError(
           409,
           'Indica el costo unitario para valorar el incremento del conteo.',
@@ -220,12 +221,13 @@ export async function countStock(sql: Sql, input: StockCountRequest, actor: Auth
         update stock_ingredients
         set stock=${input.countedQuantity},
           value_cents=case
-            when ${input.countedQuantity}::numeric = 0 then 0
+            when ${input.countedQuantity}::numeric <= 0 then 0
+            when stock <= 0 then ${input.countedQuantity}::numeric*${cost}::numeric
             when ${input.countedQuantity}::numeric > stock
               then value_cents + (${input.countedQuantity}::numeric-stock)*${cost}::numeric
             else value_cents * (${input.countedQuantity}::numeric / stock)
           end,
-          last_cost=case when ${input.countedQuantity}::numeric > stock then ${cost}::numeric else last_cost end
+          last_cost=case when ${input.countedQuantity}::numeric > stock and ${input.countedQuantity}::numeric > 0 then ${cost}::numeric else last_cost end
         where id=${input.ingredientId}
         returning id,name,unit,stock,reserved,value_cents,minimum,last_cost`;
       const after = rows[0]!;
@@ -266,28 +268,26 @@ export async function writeOffStock(sql: Sql, input: StockWasteRequest, actor: A
         )
         update stock_ingredients i
         set stock=b.stock-${input.quantity},
-            value_cents=case when b.stock=${input.quantity}::numeric then 0
+            value_cents=case when b.stock<=${input.quantity}::numeric then 0
               else b.value_cents-(b.value_cents/b.stock)*${input.quantity}::numeric end
         from before b
-        where i.id=b.id and b.stock-b.reserved>=${input.quantity} and b.stock>0
+        where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=${input.quantity}::numeric))
         returning i.id,i.name,i.unit,i.stock,i.reserved,i.value_cents,i.minimum,i.last_cost,
-          (${input.quantity}::numeric)::text as quantity, b.value_cents::text as value_before`;
+          (${input.quantity}::numeric)::text as quantity,
+          (least(greatest(b.stock,0),${input.quantity}::numeric)*case when b.stock>0 then b.value_cents/b.stock else 0 end
+            + greatest(0,${input.quantity}::numeric-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as consumed_cost`;
       const after = rows[0] as
-        (InventoryRow & { quantity: string; value_before: string }) | undefined;
+        (InventoryRow & { quantity: string; consumed_cost: string }) | undefined;
       if (!after)
         throw new PosFoundationError(
           409,
-          'No hay existencia disponible; las reservas también se respetan.',
+          'Registra primero una compra o un costo inicial para poder valorar la merma.',
         );
-      const beforeValue = after.value_before;
       await appendMovement(tx as unknown as Sql, {
         ingredientId: input.ingredientId,
         type: 'waste',
         quantityDelta: `-${input.quantity}`,
-        valueDeltaCents: scaledDecimal(
-          decimalToScaled(after.value_cents, 6) - decimalToScaled(beforeValue, 6),
-          6,
-        ),
+        valueDeltaCents: scaledDecimal(-decimalToScaled(after.consumed_cost, 6), 6),
         stockAfter: asText(after.stock),
         valueAfterCents: asText(after.value_cents),
         reason: `${input.cause}: ${input.reason}`,
