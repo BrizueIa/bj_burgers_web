@@ -1,6 +1,7 @@
 param(
   [ValidateSet('debug', 'release')]
-  [string]$Variant = 'release'
+  [string]$Variant = 'release',
+  [string]$Architectures = 'arm64-v8a'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,10 @@ if ($Variant -eq 'release') {
   if (-not (Test-Path -LiteralPath $env:BJ_ANDROID_KEYSTORE)) { throw "No existe el archivo indicado por BJ_ANDROID_KEYSTORE." }
 }
 
+if (-not $env:NODE_ENV) {
+  $env:NODE_ENV = if ($Variant -eq 'release') { 'production' } else { 'development' }
+}
+
 pnpm exec expo prebuild --platform android --no-install
 $propertiesPath = Join-Path $projectRoot 'android\signing.properties'
 if ($Variant -eq 'release') {
@@ -24,14 +29,14 @@ if ($Variant -eq 'release') {
     "storePassword=$env:BJ_ANDROID_KEYSTORE_PASSWORD",
     "keyAlias=$env:BJ_ANDROID_KEY_ALIAS",
     "keyPassword=$env:BJ_ANDROID_KEY_PASSWORD"
-  ) | Set-Content -LiteralPath $propertiesPath -NoNewline
+  ) | Set-Content -LiteralPath $propertiesPath
 }
 try {
   if ($Variant -eq 'release') {
-    & .\android\gradlew.bat :app:assembleRelease
+    & .\android\gradlew.bat -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleRelease
     $apkPath = 'android\app\build\outputs\apk\release\app-release.apk'
   } else {
-    & .\android\gradlew.bat :app:assembleDebug
+    & .\android\gradlew.bat -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleDebug
     $apkPath = 'android\app\build\outputs\apk\debug\app-debug.apk'
   }
   if ($LASTEXITCODE -ne 0) { throw "Gradle no pudo generar el APK $Variant." }

@@ -26,6 +26,7 @@ jobs:
       BJ_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.BJ_ANDROID_KEYSTORE_PASSWORD }}
       BJ_ANDROID_KEY_ALIAS: ${{ secrets.BJ_ANDROID_KEY_ALIAS }}
       BJ_ANDROID_KEY_PASSWORD: ${{ secrets.BJ_ANDROID_KEY_PASSWORD }}
+      PNPM_CONFIG_VIRTUAL_STORE_DIR_MAX_LENGTH: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +40,7 @@ jobs:
           cache: pnpm
 
       - run: corepack enable
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --virtual-store-dir C:\p
 
       - name: Restore the protected signing key
         shell: pwsh

@@ -17,7 +17,7 @@ Para usar la API local en un dispositivo físico, inicia Expo con `EXPO_PUBLIC_A
 
 ## APK y actualización instalada
 
-El identificador Android es `com.bjburgers.operacion` y el `versionCode` inicial de React Native es `2`. Una actualización de Android solo funciona cuando está firmada con la misma clave que firmó la app Flutter instalada.
+El identificador Android es `com.bjburgers.operacion`. La versión actual de React Native es `1.0.2` con `versionCode` `3`. Una actualización de Android solo funciona cuando está firmada con la misma clave que firmó la app Flutter instalada.
 
 Antes de generar un APK release, recupera y guarda fuera del repositorio la clave de firma original. Define estas variables sólo en la terminal de compilación:
 
@@ -29,11 +29,20 @@ $env:BJ_ANDROID_KEY_PASSWORD = '...'
 pnpm --filter @bj/mobile build:android
 ```
 
-El script genera el proyecto Android local, escribe propiedades de firma ignoradas por Git, construye el APK y elimina esas propiedades. Si falta una variable o el archivo, se detiene sin producir un release que no pueda actualizar la app actual. Para una compilación de desarrollo sin firma de actualización:
+El APK generado incluye `arm64-v8a`, la arquitectura de los teléfonos y tablets Android actuales. El script genera el proyecto Android local, escribe propiedades de firma ignoradas por Git, construye el APK y elimina esas propiedades. Si falta una variable o el archivo, se detiene sin producir un release que no pueda actualizar la app actual. Para una compilación de desarrollo sin firma de actualización:
 
 ```powershell
-pnpm --filter @bj/mobile build:android -Variant debug
+pnpm --filter @bj/mobile build:android -- -Variant debug
 ```
+
+Las herramientas C++ de Android todavía tienen límites de ruta en Windows. Para compilar localmente, usa un checkout corto, por ejemplo `C:\bj-build`. Si pnpm aún genera rutas largas, instala las dependencias así antes del build:
+
+```powershell
+$env:PNPM_CONFIG_VIRTUAL_STORE_DIR_MAX_LENGTH = '20'
+pnpm install --frozen-lockfile --virtual-store-dir C:\bj-build\.pnpm
+```
+
+El workflow `Android release` aplica la misma reducción de rutas en GitHub Actions.
 
 Instala primero la versión Flutter de referencia en un dispositivo de prueba y registra su certificado y `versionCode`. Después instala el APK React Native sin desinstalar. Verifica que Android muestre una actualización, abre B&J Operación, vincula el dispositivo de nuevo y confirma que ve las mismas comandas del servidor.
 
