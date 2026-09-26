@@ -202,9 +202,10 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
         (select count(*)::int from operation_audit_logs where entity='foundation-test') as effects,
         (select count(*)::int from idempotency_operations where idempotency_key=${idempotencyKey}) as operations`;
     expect(rows[0]).toEqual({ effects: 1, operations: 1 });
-    expect((await getCapabilities(database.sql)).every((capability) => !capability.enabled)).toBe(
-      true,
-    );
+    const enabledCapabilities = (await getCapabilities(database.sql))
+      .filter((capability) => capability.enabled)
+      .map((capability) => capability.key);
+    expect(enabledCapabilities).toEqual(['stock_ledger']);
   });
 
   it('dos conexiones no pueden reservar la última existencia disponible', async () => {
