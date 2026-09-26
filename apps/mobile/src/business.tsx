@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type { UnifiedOrderConfirm } from '@bj/contracts';
 import type { BusinessState } from '@bj/contracts';
