@@ -2,3 +2,4 @@
 pnpm-lock.yaml
 **/.expo/
 **/expo-env.d.ts
+apps/mobile/android/

@@ -120,6 +120,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
       '0019_menu_catalog_corrections.sql',
+      '0020_mobile_pos_operability.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -223,7 +224,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
   });
 
   it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
-    await purchase(1000, 10000);
+    await purchase(100, 1000);
     const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
     await createRecipeVersion(
       sql,
@@ -292,7 +293,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     let [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
       select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
       from stock_ingredients where id=${ingredient}`;
-    expect(balance).toEqual({ stock: '1000.000', reserved: '150.000', active: 1 });
+    expect(balance).toEqual({ stock: '100.000', reserved: '150.000', active: 1 });
     await updateOrderStatus(sql, created.order.id, 'preparing', '', device, notifier, randomUUID());
     await updateOrderStatus(sql, created.order.id, 'ready', '', device, notifier, randomUUID());
     await updateOrderStatus(
@@ -307,7 +308,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
       select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
       from stock_ingredients where id=${ingredient}`;
-    expect(balance).toEqual({ stock: '850.000', reserved: '0.000', active: 0 });
+    expect(balance).toEqual({ stock: '-50.000', reserved: '0.000', active: 0 });
     const [allocation] = await sql<{ classification: string; cost_cents: string }[]>`
       select classification,cost_cents::text from order_cost_allocations where order_id=${created.order.id}`;
     expect(allocation).toEqual({ classification: 'waste', cost_cents: '1500.000000' });
@@ -906,7 +907,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
 
   it('no inventa costos para ingredientes sin compras', async () => {
     expect((await state()).products[0]!.cost_cents).toBeNull();
-    await expect(sale()).rejects.toThrow('Existencia o costo insuficiente');
+    await expect(sale()).rejects.toThrow('Registra el costo de Carne');
   });
   it('promedia compras y conserva el costo histórico al reabastecer', async () => {
     await purchase(1000, 10000);
@@ -929,8 +930,20 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     });
     expect(after.products[0]!.cost_cents).not.toBe(2350);
   });
-  it('revierte todas las líneas si una venta supera el stock', async () => {
+  it('revierte todas las líneas si alguna receta no tiene costo registrado', async () => {
     await purchase(200, 2000);
+    const sauce = randomUUID();
+    await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Salsa','g')", [sauce]);
+    await saveRecipe(sql, {
+      productId: 'burger',
+      targetMargin: 60,
+      overheadCents: 100,
+      priceCents: 10000,
+      lines: [
+        { ingredientId: ingredient, quantity: 150 },
+        { ingredientId: sauce, quantity: 2 },
+      ],
+    });
     await expect(
       recordEntry(
         sql,
@@ -947,7 +960,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
         },
         device,
       ),
-    ).rejects.toThrow('Existencia');
+    ).rejects.toThrow('Registra el costo de Salsa');
     expect(Number((await state()).ingredients[0]!.stock)).toBe(200);
     expect((await state()).report!.sales_count).toBe(0);
   });
@@ -1047,7 +1060,22 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     await expect(sale(1, randomUUID(), 9999)).rejects.toThrow('El precio cambió');
     expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
   });
-  it('persiste reservas y evita que dos operaciones tomen la misma disponibilidad', async () => {
+  it('registra la venta bajo cero con costo de reposición y valor de inventario en cero', async () => {
+    await purchase(100, 1000);
+    await sale(1);
+    const current = await state();
+    expect(current.ingredients[0]).toMatchObject({ stock: '-50.000', value_cents: '0.000000' });
+    expect(current.report?.cost_cents).toBe('1600');
+  });
+  it('una compra posterior cubre el faltante y valora solo el saldo físico restante', async () => {
+    await purchase(100, 1000);
+    await sale(1);
+    await purchase(100, 1200);
+    const current = await state();
+    expect(current.ingredients[0]).toMatchObject({ stock: '50.000', value_cents: '600.000000' });
+    expect(Number(current.ingredients[0]?.unit_cost)).toBe(12);
+  });
+  it('persiste reservas aunque la demanda supere existencias y permite disponibilidad negativa', async () => {
     await purchase(1000, 10000);
     const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
     const first = await reserveStock(
@@ -1063,20 +1091,25 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       actor,
     );
     expect(first.result.ingredient.available).toBe('200.000');
-    await expect(
-      reserveStock(
-        sql,
-        {
-          idempotencyKey: randomUUID(),
-          ingredientId: ingredient,
-          quantity: '201',
-          referenceType: 'test',
-          referenceId: 'two',
-          reason: 'Prueba concurrente',
-        },
-        actor,
-      ),
-    ).rejects.toThrow('disponible');
+    const second = await reserveStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '201',
+        referenceType: 'test',
+        referenceId: 'two',
+        reason: 'Prueba con existencia negativa',
+      },
+      actor,
+    );
+    expect(second.result.ingredient.available).toBe('-1.000');
+    await releaseStockReservation(
+      sql,
+      second.result.reservation.id,
+      { idempotencyKey: randomUUID(), reason: 'Liberar segunda reserva' },
+      actor,
+    );
     await releaseStockReservation(
       sql,
       first.result.reservation.id,
@@ -1152,6 +1185,27 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     expect(ledger.ingredients[0]).toMatchObject({ stock: '800.000', value_cents: '8000.000000' });
     expect(ledger.movements.map((item) => item.movement_type)).toContain('count');
     expect(ledger.movements.map((item) => item.movement_type)).toContain('waste');
+  });
+  it('registra merma por encima de existencias con el costo conocido y saldo bajo cero', async () => {
+    await purchase(100, 1000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await writeOffStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '150',
+        reason: 'Ajuste real de merma',
+        cause: 'waste',
+      },
+      actor,
+    );
+    const ledger = await stockLedgerState(sql);
+    expect(ledger.ingredients[0]).toMatchObject({ stock: '-50.000', value_cents: '0.000000' });
+    expect(ledger.movements[0]).toMatchObject({
+      movement_type: 'waste',
+      value_delta_cents: '-1500.000000',
+    });
   });
   it('prorratea descuentos y gastos de compra sin alterar la equivalencia histórica', async () => {
     const supplier = randomUUID(),
@@ -1250,6 +1304,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       productId: 'burger',
       targetMargin: 60,
       overheadCents: 100,
+      priceCents: 8500,
       components: [
         {
           kind: 'ingredient' as const,
@@ -1272,9 +1327,14 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       actor,
     );
     expect(second.result.versionNumber).toBe(2);
-    const state = await recipeVersionState(sql, 'burger');
-    expect(state.versions.map((version) => version.status)).toEqual(['active', 'retired']);
-    expect(state.components).toHaveLength(2);
+    const versions = await recipeVersionState(sql, 'burger');
+    expect(versions.versions.map((version) => version.status)).toEqual(['active', 'retired']);
+    expect(versions.components).toHaveLength(2);
+    const business = await state();
+    expect(business.products[0]?.price_cents).toBe(8500);
+    expect(business.recipes).toContainEqual(
+      expect.objectContaining({ product_id: 'burger', quantity: '150.000' }),
+    );
     await expect(
       createRecipeVersion(
         sql,

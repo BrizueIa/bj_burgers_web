@@ -36,6 +36,7 @@ export const recipeVersionCreateSchema = z.object({
   productId: z.string().min(1),
   targetMargin: z.number().int().min(1).max(95),
   overheadCents: z.number().int().min(0).max(100_000_000),
+  priceCents: z.number().int().min(0).max(100_000_000).optional(),
   components: z.array(recipeComponentSchema).min(1).max(100),
 });
 export const recipeVersionMutationResponseSchema = z.object({

@@ -237,7 +237,7 @@ export function OrdersBoard() {
         )}
       </View>
       <View style={styles.floating}>
-        <Button label="Nueva comanda" onPress={() => router.push('/(app)/pos')} />
+        <Button label="Nueva venta · POS" onPress={() => router.push('/(app)/pos')} />
         <Button
           label="Importar de WhatsApp"
           secondary
@@ -826,7 +826,7 @@ function DraftItemEditor({
           <Text style={shared.label}>Bebida del combo</Text>
           <View style={styles.row}>
             {catalog.products
-              .filter((candidate) => candidate.available)
+              .filter((candidate) => candidate.available && candidate.categoryId === 'drinks')
               .map((drink) => (
                 <Pill
                   key={drink.id}
@@ -1045,6 +1045,8 @@ export function OrderBuilder() {
   const [items, setItems] = useState<DraftItem[]>([]);
   const [quote, setQuote] = useState<number | undefined>();
   const [message, setMessage] = useState<string>();
+  const [search, setSearch] = useState('');
+  const [categoryId, setCategoryId] = useState('all');
   const [busy, setBusy] = useState(false);
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
   const enabled =
@@ -1154,9 +1156,10 @@ export function OrderBuilder() {
 
   return (
     <ScrollScreen>
-      <SectionTitle title="Nueva comanda" />
+      <SectionTitle title="Nueva venta" />
       <Text style={shared.subtitle}>
-        Elige productos, personaliza ingredientes y extras, y confirma.
+        Agrega productos al carrito, personaliza cada uno y confirma la venta. El servidor valida el
+        precio y el inventario.
       </Text>
       {capabilities.error ? (
         <Notice kind="warning">
@@ -1166,17 +1169,35 @@ export function OrderBuilder() {
       ) : !enabled ? (
         <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
       ) : null}
-      <Text style={shared.label}>Agregar producto</Text>
+      <Field label="Buscar producto" value={search} onChangeText={setSearch} />
       <View style={styles.row}>
+        <Pill label="Todo" selected={categoryId === 'all'} onPress={() => setCategoryId('all')} />
+        {catalog.data.categories.map((category) => (
+          <Pill
+            key={category.id}
+            label={category.name}
+            selected={categoryId === category.id}
+            onPress={() => setCategoryId(category.id)}
+          />
+        ))}
+      </View>
+      <Text style={shared.label}>Productos · {items.length} en el carrito</Text>
+      <View style={styles.productGrid}>
         {catalog.data.products
-          .filter((product) => product.available)
+          .filter(
+            (product) =>
+              product.available &&
+              (categoryId === 'all' || product.categoryId === categoryId) &&
+              product.name
+                .toLocaleLowerCase('es-MX')
+                .includes(search.trim().toLocaleLowerCase('es-MX')),
+          )
           .map((product) => (
-            <Pill
-              key={product.id}
-              label={`${product.name} ${money(product.priceCents)}`}
-              selected={false}
-              onPress={() => addProduct(product)}
-            />
+            <Card key={product.id} style={styles.productCard}>
+              <Text style={shared.text}>{product.name}</Text>
+              <Text style={shared.subtitle}>{money(product.priceCents)}</Text>
+              <Button label="Agregar" onPress={() => addProduct(product)} />
+            </Card>
           ))}
       </View>
       {items.map((item, index) => (
@@ -1204,6 +1225,19 @@ export function OrderBuilder() {
           La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
           solicitud.
         </Notice>
+      ) : null}
+      {items.length ? (
+        <Button
+          label="Vaciar carrito"
+          secondary
+          disabled={busy}
+          onPress={() => {
+            pending.current = undefined;
+            setQuote(undefined);
+            setItems([]);
+            setMessage(undefined);
+          }}
+        />
       ) : null}
       <Button
         label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
@@ -1244,4 +1278,6 @@ const styles = StyleSheet.create({
   event: { paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  productGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  productCard: { flexGrow: 1, flexBasis: 175, gap: 8 },
 });

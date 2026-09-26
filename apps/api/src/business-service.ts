@@ -95,16 +95,22 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
     let cost = 0;
     if (input.kind === 'purchase') {
       for (const line of input.lines) {
-        const rows = await tx`update stock_ingredients set stock=stock+${line.quantity},
-          value_cents=value_cents+${line.totalCents}, last_cost=${line.totalCents}::numeric/${line.quantity}
-          where id=${line.ingredientId} returning name, unit, stock::text as stock_after, value_cents::text as value_after`;
+        const rows = await tx`with before as (
+          select * from stock_ingredients where id=${line.ingredientId} for update
+        ) update stock_ingredients i set stock=b.stock+${line.quantity},
+          value_cents=case when b.stock<0
+            then greatest(0,b.stock+${line.quantity})*(${line.totalCents}::numeric/${line.quantity})
+            else b.value_cents+${line.totalCents} end,
+          last_cost=${line.totalCents}::numeric/${line.quantity}
+          from before b where i.id=b.id returning i.name, i.unit, i.stock::text as stock_after,
+            i.value_cents::text as value_after,(i.value_cents-b.value_cents)::text as value_delta`;
         if (!rows[0]) throw new OrderError(404, 'Ingrediente inexistente.');
         total += line.totalCents;
         snapshots.push({ ...line, ...rows[0] });
         movements.push({
           id: line.ingredientId,
           quantity: line.quantity,
-          value: line.totalCents,
+          value: rows[0].value_delta,
           stockAfter: rows[0].stock_after,
           valueAfter: rows[0].value_after,
           type: 'purchase',
@@ -126,12 +132,17 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
           const consumed = await tx`with before as (
             select *, ${ingredient.quantity}::numeric*${line.quantity} as needed from stock_ingredients where id=${ingredient.ingredient_id} for update
           ) update stock_ingredients i set stock=b.stock-b.needed,
-            value_cents=greatest(0,b.value_cents-(b.value_cents/nullif(b.stock,0))*b.needed)
-            from before b where i.id=b.id and b.stock-b.reserved>=b.needed and b.stock>0 and b.last_cost is not null
-            returning b.needed::text as quantity, (b.value_cents/b.stock*b.needed)::text as cost,
+            value_cents=case when b.stock<=b.needed then 0 else b.value_cents-(b.value_cents/b.stock)*b.needed end
+            from before b where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=b.needed))
+            returning b.needed::text as quantity,
+              (least(greatest(b.stock,0),b.needed)*case when b.stock>0 then b.value_cents/b.stock else 0 end
+                + greatest(0,b.needed-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as cost,
               i.stock::text as stock_after, i.value_cents::text as value_after`;
           if (!consumed[0])
-            throw new OrderError(409, `Existencia o costo insuficiente: ${ingredient.name}.`);
+            throw new OrderError(
+              409,
+              `Registra el costo de ${ingredient.name} con una compra antes de vender.`,
+            );
           ingredients.push({
             ingredientId: ingredient.ingredient_id,
             name: ingredient.name,
@@ -167,11 +178,17 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
       const rows =
         await tx`with before as (select * from stock_ingredients where id=${input.ingredientId} for update)
         update stock_ingredients i set stock=b.stock-${input.quantity},
-        value_cents=greatest(0,b.value_cents-b.value_cents/nullif(b.stock,0)*${input.quantity})
-        from before b where i.id=b.id and b.stock-b.reserved>=${input.quantity} and b.stock>0
-        returning b.name, (b.value_cents/b.stock*${input.quantity})::text as cost,
+        value_cents=case when b.stock<=${input.quantity}::numeric then 0 else b.value_cents-b.value_cents/b.stock*${input.quantity} end
+        from before b where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=${input.quantity}))
+        returning b.name,
+          (least(greatest(b.stock,0),${input.quantity}::numeric)*case when b.stock>0 then b.value_cents/b.stock else 0 end
+            + greatest(0,${input.quantity}::numeric-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as cost,
           i.stock::text as stock_after, i.value_cents::text as value_after`;
-      if (!rows[0]) throw new OrderError(409, 'Existencia insuficiente.');
+      if (!rows[0])
+        throw new OrderError(
+          409,
+          'Registra el costo de este ingrediente con una compra antes de registrar la merma.',
+        );
       cost = Math.round(Number(rows[0].cost));
       snapshots.push({ ingredientId: input.ingredientId, quantity: input.quantity, ...rows[0] });
       movements.push({

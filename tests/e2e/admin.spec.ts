@@ -15,7 +15,8 @@ test('la administración presenta POS, caja y reportes desde el mismo panel', as
   await expect(page.getByRole('heading', { name: 'Resumen' })).toBeVisible();
   await page.getByRole('button', { name: 'Vender' }).click();
   await expect(page.getByRole('heading', { name: 'Nueva venta' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('aún no está habilitado en el servidor');
+  await expect(page.getByLabel('Producto')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Agregar' })).toBeVisible();
   await page.getByRole('button', { name: 'Caja' }).click();
   await expect(page.getByRole('heading', { name: 'Caja cerrada' })).toBeVisible();
   await page.getByRole('button', { name: 'Reportes' }).click();

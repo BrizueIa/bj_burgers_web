@@ -13,6 +13,7 @@ function idempotentRequest(input: RecipeVersionCreate) {
     productId: input.productId,
     targetMargin: input.targetMargin,
     overheadCents: input.overheadCents,
+    ...(input.priceCents === undefined ? {} : { priceCents: input.priceCents }),
     components: input.components.map((component) => ({
       kind: component.kind,
       quantity: component.quantity,
@@ -94,6 +95,21 @@ export async function createRecipeVersion(
           (recipe_version_id,component_kind,ingredient_id,component_product_id,modifier_id,quantity,removable,extra)
           values
           (${recipeVersion.id},${component.kind},${component.ingredientId ?? null},${component.productId ?? null},${component.modifierId ?? null},${component.quantity},${component.removable},${component.extra})`;
+      await transaction`insert into product_recipes(product_id,target_margin,overhead_cents)
+        values(${input.productId},${input.targetMargin},${input.overheadCents})
+        on conflict(product_id) do update set target_margin=excluded.target_margin,overhead_cents=excluded.overhead_cents`;
+      if (
+        input.components.every(
+          (component) => component.kind === 'ingredient' || component.kind === 'packaging',
+        )
+      ) {
+        await transaction`delete from recipe_lines where product_id=${input.productId}`;
+        for (const component of input.components)
+          await transaction`insert into recipe_lines(product_id,ingredient_id,quantity)
+            values(${input.productId},${component.ingredientId!},${component.quantity})`;
+      }
+      if (input.priceCents !== undefined)
+        await transaction`update products set price_cents=${input.priceCents},updated_at=now() where id=${input.productId}`;
       await auditOperation(transaction, actor, {
         action: 'create',
         entity: 'recipe_version',
