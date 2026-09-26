@@ -1046,8 +1046,10 @@ export function OrderBuilder() {
   const [quote, setQuote] = useState<number | undefined>();
   const [message, setMessage] = useState<string>();
   const [search, setSearch] = useState('');
-  const [categoryId, setCategoryId] = useState('all');
+  const [categoryId, setCategoryId] = useState('burgers');
   const [busy, setBusy] = useState(false);
+  const { width } = useWindowDimensions();
+  const tablet = width >= 760;
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
   const enabled =
     capabilities.data?.some(
@@ -1074,6 +1076,26 @@ export function OrderBuilder() {
         note: '',
       },
     ]);
+  };
+  const addModifier = (modifierId: string) => {
+    const targetIndex = items.reduce((lastIndex, item, index) => {
+      const product = catalog.data?.products.find((candidate) => candidate.id === item.productId);
+      return product?.categoryId !== 'drinks' ? index : lastIndex;
+    }, -1);
+    if (targetIndex < 0) {
+      setMessage('Agrega primero una hamburguesa, hot dog o complemento para asignar el extra.');
+      return;
+    }
+    pending.current = undefined;
+    setQuote(undefined);
+    setMessage(undefined);
+    setItems((current) =>
+      current.map((item, index) =>
+        index === targetIndex && !item.modifierIds.includes(modifierId)
+          ? { ...item, modifierIds: [...item.modifierIds, modifierId] }
+          : item,
+      ),
+    );
   };
   const request = (): Omit<UnifiedOrderConfirm, 'quotedTotalCents' | 'idempotencyKey'> => ({
     fulfillment: 'counter',
@@ -1154,102 +1176,144 @@ export function OrderBuilder() {
       </ScrollScreen>
     );
 
+  const categories = [
+    ...catalog.data.categories
+      .filter((category) => category.id !== 'drinks')
+      .sort((a, b) => a.order - b.order),
+    { id: 'extras', name: 'Extras', order: 4 },
+    ...catalog.data.categories.filter((category) => category.id === 'drinks'),
+  ];
+  const searchTerm = search.trim().toLocaleLowerCase('es-MX');
+  const products = catalog.data.products.filter(
+    (product) =>
+      product.available &&
+      product.categoryId === categoryId &&
+      product.name.toLocaleLowerCase('es-MX').includes(searchTerm),
+  );
+  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+
   return (
-    <ScrollScreen>
-      <SectionTitle title="Nueva venta" />
-      <Text style={shared.subtitle}>
-        Agrega productos al carrito, personaliza cada uno y confirma la venta. El servidor valida el
-        precio y el inventario.
-      </Text>
-      {capabilities.error ? (
-        <Notice kind="warning">
-          La API conectada no publica las capacidades del POS. Puedes preparar el pedido, pero el
-          servidor debe actualizarse para cotizarlo y confirmarlo.
-        </Notice>
-      ) : !enabled ? (
-        <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
-      ) : null}
-      <Field label="Buscar producto" value={search} onChangeText={setSearch} />
-      <View style={styles.row}>
-        <Pill label="Todo" selected={categoryId === 'all'} onPress={() => setCategoryId('all')} />
-        {catalog.data.categories.map((category) => (
-          <Pill
-            key={category.id}
-            label={category.name}
-            selected={categoryId === category.id}
-            onPress={() => setCategoryId(category.id)}
-          />
-        ))}
-      </View>
-      <Text style={shared.label}>Productos · {items.length} en el carrito</Text>
-      <View style={styles.productGrid}>
-        {catalog.data.products
-          .filter(
-            (product) =>
-              product.available &&
-              (categoryId === 'all' || product.categoryId === categoryId) &&
-              product.name
-                .toLocaleLowerCase('es-MX')
-                .includes(search.trim().toLocaleLowerCase('es-MX')),
-          )
-          .map((product) => (
-            <Card key={product.id} style={styles.productCard}>
-              <Text style={shared.text}>{product.name}</Text>
-              <Text style={shared.subtitle}>{money(product.priceCents)}</Text>
-              <Button label="Agregar" onPress={() => addProduct(product)} />
-            </Card>
+    <View style={shared.screen}>
+      <View style={[shared.content, styles.posHeader]}>
+        <SectionTitle title="Nueva venta" />
+        <Text style={shared.subtitle}>
+          Agrega productos al carrito, personaliza cada uno y confirma la venta. El servidor valida
+          el precio y el inventario.
+        </Text>
+        {capabilities.error ? (
+          <Notice kind="warning">
+            La API conectada no publica las capacidades del POS. Puedes preparar el pedido, pero el
+            servidor debe actualizarse para cotizarlo y confirmarlo.
+          </Notice>
+        ) : !enabled ? (
+          <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
+        ) : null}
+        <Field label="Buscar producto" value={search} onChangeText={setSearch} />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.row}
+        >
+          {categories.map((category) => (
+            <Pill
+              key={category.id}
+              label={category.name}
+              selected={categoryId === category.id}
+              onPress={() => setCategoryId(category.id)}
+            />
           ))}
+        </ScrollView>
+        <Text style={shared.label}>Catálogo · {itemCount} producto(s) en la venta</Text>
       </View>
-      {items.map((item, index) => (
-        <DraftItemEditor
-          key={`${item.productId}-${index}`}
-          item={item}
-          catalog={catalog.data!}
-          onChange={(next) => updateItem(index, next)}
-          onRemove={() => {
-            pending.current = undefined;
-            setQuote(undefined);
-            setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
-          }}
-        />
-      ))}
-      {quote !== undefined ? (
-        <>
-          <Text style={styles.total}>Total cotizado: {money(quote)}</Text>
-          <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
-        </>
-      ) : null}
-      {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
-      {pending.current && !busy ? (
-        <Notice kind="warning">
-          La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
-          solicitud.
-        </Notice>
-      ) : null}
-      {items.length ? (
-        <Button
-          label="Vaciar carrito"
-          secondary
-          disabled={busy}
-          onPress={() => {
-            pending.current = undefined;
-            setQuote(undefined);
-            setItems([]);
-            setMessage(undefined);
-          }}
-        />
-      ) : null}
-      <Button
-        label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
-        disabled={busy || !enabled || items.length === 0}
-        onPress={() => void submit()}
-      />
-      <Button
-        label="Importar pedido de WhatsApp"
-        secondary
-        onPress={() => router.push('/(app)/orders/import')}
-      />
-    </ScrollScreen>
+      <View style={[styles.posContent, tablet && styles.posContentTablet]}>
+        <ScrollView
+          style={styles.catalogPane}
+          contentContainerStyle={styles.productGrid}
+          keyboardShouldPersistTaps="handled"
+        >
+          {categoryId === 'extras' ? (
+            catalog.data.modifiers
+              .filter((modifier) => modifier.available)
+              .map((modifier) => (
+                <Card key={modifier.id} style={styles.productCard}>
+                  <Text style={shared.text}>{modifier.name}</Text>
+                  <Text style={shared.subtitle}>{money(modifier.priceCents)}</Text>
+                  <Button label="Agregar extra" onPress={() => addModifier(modifier.id)} />
+                </Card>
+              ))
+          ) : products.length ? (
+            products.map((product) => (
+              <Card key={product.id} style={styles.productCard}>
+                <Text style={shared.text}>{product.name}</Text>
+                <Text style={shared.subtitle}>{money(product.priceCents)}</Text>
+                <Button label="Agregar" onPress={() => addProduct(product)} />
+              </Card>
+            ))
+          ) : (
+            <Text style={shared.subtitle}>No hay productos disponibles en esta categoría.</Text>
+          )}
+        </ScrollView>
+        <ScrollView
+          style={[styles.cartPane, tablet && styles.cartPaneTablet]}
+          contentContainerStyle={styles.cartContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={shared.text}>Venta actual · {itemCount} artículo(s)</Text>
+          {!items.length ? (
+            <Text style={shared.subtitle}>Agrega productos desde el catálogo.</Text>
+          ) : null}
+          {items.map((item, index) => (
+            <DraftItemEditor
+              key={`${item.productId}-${index}`}
+              item={item}
+              catalog={catalog.data!}
+              onChange={(next) => updateItem(index, next)}
+              onRemove={() => {
+                pending.current = undefined;
+                setQuote(undefined);
+                setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
+              }}
+            />
+          ))}
+          {quote !== undefined ? (
+            <>
+              <Text style={styles.total}>Total cotizado: {money(quote)}</Text>
+              <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
+            </>
+          ) : null}
+          {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
+          {pending.current && !busy ? (
+            <Notice kind="warning">
+              La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
+              solicitud.
+            </Notice>
+          ) : null}
+          {items.length ? (
+            <Button
+              label="Vaciar carrito"
+              secondary
+              disabled={busy}
+              onPress={() => {
+                pending.current = undefined;
+                setQuote(undefined);
+                setItems([]);
+                setMessage(undefined);
+              }}
+            />
+          ) : null}
+          <Button
+            label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
+            disabled={busy || !enabled || items.length === 0}
+            onPress={() => void submit()}
+          />
+          <Button
+            label="Importar pedido de WhatsApp"
+            secondary
+            onPress={() => router.push('/(app)/orders/import')}
+          />
+        </ScrollView>
+      </View>
+    </View>
   );
 }
 
@@ -1279,5 +1343,12 @@ const styles = StyleSheet.create({
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   productGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  productCard: { flexGrow: 1, flexBasis: 175, gap: 8 },
+  productCard: { flexGrow: 1, flexBasis: 155, gap: 8 },
+  posHeader: { paddingBottom: 10, gap: 10 },
+  posContent: { flex: 1, minHeight: 0 },
+  posContentTablet: { flexDirection: 'row', gap: 14, paddingHorizontal: 20, paddingBottom: 16 },
+  catalogPane: { flex: 1, minHeight: 0 },
+  cartPane: { flex: 1, minHeight: 180, borderTopWidth: 1, borderColor: colors.border },
+  cartPaneTablet: { flex: 0.9, borderTopWidth: 0, borderLeftWidth: 1 },
+  cartContent: { padding: 16, gap: 12, paddingBottom: 30 },
 });

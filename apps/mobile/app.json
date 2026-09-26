@@ -2,13 +2,13 @@
   "expo": {
     "name": "B&J Operación",
     "slug": "bj-operacion",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "scheme": "bjoperacion",
     "android": {
       "package": "com.bjburgers.operacion",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "backgroundColor": "#0a0d0b"
       }

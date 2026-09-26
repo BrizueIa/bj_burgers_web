@@ -62,9 +62,8 @@ ALTER TABLE business_entries
 ALTER TABLE stock_ingredients DROP CONSTRAINT IF EXISTS stock_ingredients_stock_check;
 ALTER TABLE stock_ingredients DROP CONSTRAINT IF EXISTS stock_ingredients_reserved_not_over_stock;
 ALTER TABLE stock_ingredients DROP CONSTRAINT IF EXISTS stock_ingredients_reserved_not_over_available_stock;
-ALTER TABLE stock_ingredients
-  ADD CONSTRAINT stock_ingredients_reserved_not_over_available_stock
-  CHECK (reserved <= greatest(stock, 0));
+-- Reservations represent incoming POS demand and may exceed physical stock.
+-- The difference is the negative balance to reconcile after opening counts.
 
 ALTER TABLE stock_ledger_movements
   DROP CONSTRAINT IF EXISTS stock_ledger_movements_stock_after_check;

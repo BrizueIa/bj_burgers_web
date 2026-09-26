@@ -226,7 +226,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
 
   it('inicia el catálogo de ingredientes con saldo cero y la migración se puede repetir', async () => {
     const migration = await readFile(
-      new URL('../migrations/0020_inventory_catalog_and_negative_balances.sql', import.meta.url),
+      new URL('../migrations/0021_inventory_catalog_and_negative_balances.sql', import.meta.url),
       'utf8',
     );
     await pg.exec(migration);

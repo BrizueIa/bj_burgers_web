@@ -279,10 +279,7 @@ export async function writeOffStock(sql: Sql, input: StockWasteRequest, actor: A
       const after = rows[0] as
         (InventoryRow & { quantity: string; consumed_cost: string }) | undefined;
       if (!after)
-        throw new PosFoundationError(
-          409,
-          'La existencia está reservada por otra comanda.',
-        );
+        throw new PosFoundationError(409, 'La existencia está reservada por otra comanda.');
       await appendMovement(tx as unknown as Sql, {
         ingredientId: input.ingredientId,
         type: 'waste',

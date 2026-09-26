@@ -118,6 +118,8 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
   const unifiedReport = dashboardReport.data?.summary;
   const revenue = unifiedReport?.grossSalesCents ?? numberValue(report.revenue_cents);
   const cost = unifiedReport?.costOfGoodsSoldCents ?? numberValue(report.cost_cents);
+  const uncostedSales = unifiedReport?.pendingCostCents ?? numberValue(report.uncosted_sales_cents);
+  const valuedRevenue = Math.max(0, revenue - uncostedSales);
   const expenses = unifiedReport?.operatingExpensesCents ?? numberValue(report.expenses_cents);
   const waste = unifiedReport?.wasteCents ?? numberValue(report.waste_cents);
   const salesCount = unifiedReport?.deliveredOrders ?? report.sales_count;
@@ -181,11 +183,15 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           />
         </View>
       ) : null}
-      {data.report.uncosted_sales_count > 0 || data.report.uncosted_waste_count > 0 ? (
+      {data.report.uncosted_sales_count > 0 ||
+      data.report.uncosted_waste_count > 0 ||
+      (unifiedReport?.pendingCostCents ?? 0) > 0 ? (
         <Notice kind="warning">
-          {data.report.uncosted_sales_count > 0
-            ? `${data.report.uncosted_sales_count} venta(s) por ${money(data.report.uncosted_sales_cents)} tienen costo pendiente y no se incluyen en la utilidad.`
-            : ''}
+          {(unifiedReport?.pendingCostCents ?? 0) > 0
+            ? `${unifiedReport?.unvaluedDeliveredOrders ?? 0} venta(s) por ${money(unifiedReport?.pendingCostCents ?? 0)} tienen costo pendiente y no se incluyen en la utilidad.`
+            : data.report.uncosted_sales_count > 0
+              ? `${data.report.uncosted_sales_count} venta(s) por ${money(data.report.uncosted_sales_cents)} tienen costo pendiente y no se incluyen en la utilidad.`
+              : ''}
           {data.report.uncosted_sales_count > 0 && data.report.uncosted_waste_count > 0 ? '\n' : ''}
           {data.report.uncosted_waste_count > 0
             ? `${data.report.uncosted_waste_count} merma(s) no tienen costo calculable.`
