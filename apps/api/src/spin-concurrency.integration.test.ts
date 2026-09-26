@@ -67,6 +67,7 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
       '0019_menu_catalog_corrections.sql',
+      '0020_inventory_catalog_and_negative_balances.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     await database.sql`insert into categories(id,slug,name)
@@ -201,9 +202,10 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
         (select count(*)::int from operation_audit_logs where entity='foundation-test') as effects,
         (select count(*)::int from idempotency_operations where idempotency_key=${idempotencyKey}) as operations`;
     expect(rows[0]).toEqual({ effects: 1, operations: 1 });
-    expect((await getCapabilities(database.sql)).every((capability) => !capability.enabled)).toBe(
-      true,
-    );
+    const enabledCapabilities = (await getCapabilities(database.sql))
+      .filter((capability) => capability.enabled)
+      .map((capability) => capability.key);
+    expect(enabledCapabilities).toEqual(['stock_ledger']);
   });
 
   it('dos conexiones no pueden reservar la última existencia disponible', async () => {

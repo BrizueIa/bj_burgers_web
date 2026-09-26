@@ -221,6 +221,8 @@ export async function countStock(sql: Sql, input: StockCountRequest, actor: Auth
         set stock=${input.countedQuantity},
           value_cents=case
             when ${input.countedQuantity}::numeric = 0 then 0
+            when stock < 0
+              then ${input.countedQuantity}::numeric * ${cost}::numeric
             when ${input.countedQuantity}::numeric > stock
               then value_cents + (${input.countedQuantity}::numeric-stock)*${cost}::numeric
             else value_cents * (${input.countedQuantity}::numeric / stock)
@@ -266,19 +268,16 @@ export async function writeOffStock(sql: Sql, input: StockWasteRequest, actor: A
         )
         update stock_ingredients i
         set stock=b.stock-${input.quantity},
-            value_cents=case when b.stock=${input.quantity}::numeric then 0
+            value_cents=case when b.stock<=${input.quantity}::numeric then 0
               else b.value_cents-(b.value_cents/b.stock)*${input.quantity}::numeric end
         from before b
-        where i.id=b.id and b.stock-b.reserved>=${input.quantity} and b.stock>0
+        where i.id=b.id and (b.reserved=0 or b.stock-b.reserved>=${input.quantity})
         returning i.id,i.name,i.unit,i.stock,i.reserved,i.value_cents,i.minimum,i.last_cost,
           (${input.quantity}::numeric)::text as quantity, b.value_cents::text as value_before`;
       const after = rows[0] as
         (InventoryRow & { quantity: string; value_before: string }) | undefined;
       if (!after)
-        throw new PosFoundationError(
-          409,
-          'No hay existencia disponible; las reservas también se respetan.',
-        );
+        throw new PosFoundationError(409, 'La existencia está reservada por otra comanda.');
       const beforeValue = after.value_before;
       await appendMovement(tx as unknown as Sql, {
         ingredientId: input.ingredientId,
