@@ -88,6 +88,7 @@ function DateWindow({
 
 export function BusinessPage({ section }: { section: BusinessSection }) {
   const [range, setRange] = useState(dayWindow);
+  const [businessSearch, setBusinessSearch] = useState('');
   const { data, error, isLoading, refetch, isFetching } = useBusiness(range);
   const capabilities = useQuery({
     queryKey: ['capabilities'],
@@ -126,6 +127,16 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
   const lowStock = data.ingredients.filter(
     (ingredient) => numberValue(ingredient.stock) <= numberValue(ingredient.minimum),
   ).length;
+  const visibleIngredients = data.ingredients.filter((ingredient) =>
+    ingredient.name
+      .toLocaleLowerCase('es-MX')
+      .includes(businessSearch.trim().toLocaleLowerCase('es-MX')),
+  );
+  const visibleProducts = data.products.filter((product) =>
+    product.name
+      .toLocaleLowerCase('es-MX')
+      .includes(businessSearch.trim().toLocaleLowerCase('es-MX')),
+  );
   const stockLedgerEnabled = capabilities.data?.some(
     (capability) => capability.key === 'stock_ledger' && capability.enabled,
   );
@@ -282,13 +293,18 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               ),
             )}
           />
+          <Field
+            label="Buscar ingrediente"
+            value={businessSearch}
+            onChangeText={setBusinessSearch}
+          />
           {data.ingredients.length === 0 ? (
             <Notice>
               Agrega ingredientes en gramos, mililitros o piezas. Incluye empaques y consumibles en
               las recetas.
             </Notice>
           ) : (
-            data.ingredients.map((ingredient) => (
+            visibleIngredients.map((ingredient) => (
               <Card key={ingredient.id}>
                 <Text style={shared.text}>
                   {ingredient.name}
@@ -322,7 +338,15 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             El precio sugerido usa tu margen objetivo. Se basa en el promedio ponderado de
             existencias y en el último costo cuando el ingrediente está agotado.
           </Text>
-          {data.products.map((product) => (
+          <Field
+            label="Buscar producto o receta"
+            value={businessSearch}
+            onChangeText={setBusinessSearch}
+          />
+          {visibleProducts.length === 0 ? (
+            <Text style={shared.subtitle}>No hay productos que coincidan con la búsqueda.</Text>
+          ) : null}
+          {visibleProducts.map((product) => (
             <Card key={product.id}>
               <Text style={shared.text}>{product.name}</Text>
               <Text style={shared.subtitle}>
@@ -417,6 +441,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [neighborhood, setNeighborhood] = useState('');
   const [streetAndNumber, setStreetAndNumber] = useState('');
   const [selectedId, setSelectedId] = useState('');
+  const [lineSearch, setLineSearch] = useState('');
+  const [showAllChoices, setShowAllChoices] = useState(false);
   const [lineQuantity, setLineQuantity] = useState('');
   const [lineTotal, setLineTotal] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
@@ -464,6 +490,11 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     );
   const source = mode === 'sale' ? data.products : data.ingredients;
   const selected = source.find((item) => item.id === selectedId);
+  const filteredSource = source.filter((item) =>
+    item.name.toLocaleLowerCase('es-MX').includes(lineSearch.trim().toLocaleLowerCase('es-MX')),
+  );
+  const visibleSource =
+    lineSearch.trim() || showAllChoices ? filteredSource : filteredSource.slice(0, 8);
   const requiresLines =
     mode === 'purchase' || mode === 'sale' || mode === 'recipe' || mode === 'count';
   const addLine = () => {
@@ -918,8 +949,16 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       {requiresLines || mode === 'waste' ? (
         <Card>
           <Text style={shared.text}>{mode === 'sale' ? 'Productos' : 'Ingredientes'}</Text>
-          <ScrollView horizontal contentContainerStyle={styles.row}>
-            {source.map((item) => (
+          <Field
+            label={mode === 'sale' ? 'Buscar producto' : 'Buscar ingrediente'}
+            value={lineSearch}
+            onChangeText={(value) => {
+              setLineSearch(value);
+              setShowAllChoices(false);
+            }}
+          />
+          <View style={styles.row}>
+            {visibleSource.map((item) => (
               <Pill
                 key={item.id}
                 label={item.name}
@@ -927,7 +966,14 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                 onPress={() => setSelectedId(item.id)}
               />
             ))}
-          </ScrollView>
+          </View>
+          {!lineSearch.trim() && filteredSource.length > 8 ? (
+            <Button
+              label={showAllChoices ? 'Mostrar menos' : `Ver todos (${filteredSource.length})`}
+              secondary
+              onPress={() => setShowAllChoices((current) => !current)}
+            />
+          ) : null}
           <Field
             label={
               mode === 'sale'
