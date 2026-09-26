@@ -271,7 +271,7 @@ export async function writeOffStock(sql: Sql, input: StockWasteRequest, actor: A
             value_cents=case when b.stock<=${input.quantity}::numeric then 0
               else b.value_cents-(b.value_cents/b.stock)*${input.quantity}::numeric end
         from before b
-        where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=${input.quantity}::numeric))
+        where i.id=b.id and (b.reserved=0 or b.stock-b.reserved>=${input.quantity})
         returning i.id,i.name,i.unit,i.stock,i.reserved,i.value_cents,i.minimum,i.last_cost,
           (${input.quantity}::numeric)::text as quantity,
           (least(greatest(b.stock,0),${input.quantity}::numeric)*case when b.stock>0 then b.value_cents/b.stock else 0 end
@@ -281,7 +281,7 @@ export async function writeOffStock(sql: Sql, input: StockWasteRequest, actor: A
       if (!after)
         throw new PosFoundationError(
           409,
-          'Registra primero una compra o un costo inicial para poder valorar la merma.',
+          'La existencia está reservada por otra comanda.',
         );
       await appendMovement(tx as unknown as Sql, {
         ingredientId: input.ingredientId,

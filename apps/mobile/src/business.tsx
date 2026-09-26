@@ -167,9 +167,11 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           <Metric label="Costo de ventas" value={money(cost)} />
           <Metric
             label="Utilidad bruta"
-            value={money(revenue - cost)}
+            value={money(valuedRevenue - cost)}
             detail={
-              revenue ? `Margen ${(((revenue - cost) / revenue) * 100).toFixed(1)}%` : 'Sin ventas'
+              valuedRevenue
+                ? `Margen de ventas costeadas ${(((valuedRevenue - cost) / valuedRevenue) * 100).toFixed(1)}%`
+                : 'Sin ventas con costo completo'
             }
           />
           <Metric
@@ -178,6 +180,17 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             detail="Después de gastos y mermas"
           />
         </View>
+      ) : null}
+      {data.report.uncosted_sales_count > 0 || data.report.uncosted_waste_count > 0 ? (
+        <Notice kind="warning">
+          {data.report.uncosted_sales_count > 0
+            ? `${data.report.uncosted_sales_count} venta(s) por ${money(data.report.uncosted_sales_cents)} tienen costo pendiente y no se incluyen en la utilidad.`
+            : ''}
+          {data.report.uncosted_sales_count > 0 && data.report.uncosted_waste_count > 0 ? '\n' : ''}
+          {data.report.uncosted_waste_count > 0
+            ? `${data.report.uncosted_waste_count} merma(s) no tienen costo calculable.`
+            : ''}
+        </Notice>
       ) : null}
       {section === 'home' ? (
         <>
@@ -234,6 +247,12 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       ) : null}
       {section === 'inventory' ? (
         <>
+          <Notice>
+            El catálogo de ingredientes inicia con existencia cero. Ventas y mermas pueden dejar
+            saldos negativos mientras capturas el inventario real; registra un conteo para
+            regularizarlo. Las operaciones sin costo conocido se marcan como pendientes y no inflan
+            la utilidad.
+          </Notice>
           <View style={styles.actions}>
             <Button label="Ingrediente" onPress={() => openEditor('ingredient')} />
             <Button label="Compra" secondary onPress={() => openEditor('purchase')} />
@@ -244,8 +263,8 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           </View>
           {!stockLedgerEnabled ? (
             <Notice kind="warning">
-              El libro mayor está integrado, pero los conteos y reservas se habilitan después de
-              conciliar las existencias actuales.
+              El servidor aún no habilita los conteos de inventario. Actualiza la API para capturar
+              existencias y movimientos desde esta pantalla.
             </Notice>
           ) : null}
           <Metric
@@ -267,9 +286,13 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               <Card key={ingredient.id}>
                 <Text style={shared.text}>
                   {ingredient.name}
-                  {numberValue(ingredient.stock) <= numberValue(ingredient.minimum)
-                    ? ' · Bajo mínimo'
-                    : ''}
+                  {numberValue(ingredient.stock) < 0
+                    ? ' · Negativo, pendiente de conteo'
+                    : numberValue(ingredient.stock) === 0
+                      ? ' · Sin existencias'
+                      : numberValue(ingredient.stock) <= numberValue(ingredient.minimum)
+                        ? ' · Bajo mínimo'
+                        : ''}
                 </Text>
                 <Text style={shared.subtitle}>
                   {quantity(ingredient.stock)} {ingredient.unit} · mínimo{' '}

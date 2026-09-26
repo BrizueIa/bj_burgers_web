@@ -12,34 +12,6 @@ ALTER TABLE purchase_lines
 ALTER TABLE purchase_lines
   ADD COLUMN IF NOT EXISTS last_cost_snapshot boolean NOT NULL DEFAULT false;
 
--- Start with the physical ingredients already named by the published menu.
--- Quantities and costs intentionally remain zero/unknown until the operator
--- records a real count or purchase; no recipe quantities are guessed here.
-INSERT INTO stock_ingredients (name, unit, stock, value_cents, minimum)
-VALUES
-  ('Aderezo B&J', 'g', 0, 0, 0),
-  ('Aros de cebolla', 'g', 0, 0, 0),
-  ('Carne Angus', 'g', 0, 0, 0),
-  ('Catsup', 'g', 0, 0, 0),
-  ('Cebolla', 'g', 0, 0, 0),
-  ('Cebolla caramelizada', 'g', 0, 0, 0),
-  ('Jamón', 'g', 0, 0, 0),
-  ('Jalapeño', 'g', 0, 0, 0),
-  ('Lechuga', 'g', 0, 0, 0),
-  ('Mayonesa', 'g', 0, 0, 0),
-  ('Mostaza', 'g', 0, 0, 0),
-  ('Papas', 'g', 0, 0, 0),
-  ('Piña asada', 'g', 0, 0, 0),
-  ('Queso americano', 'g', 0, 0, 0),
-  ('Queso asadero', 'g', 0, 0, 0),
-  ('Queso Philadelphia', 'g', 0, 0, 0),
-  ('Salchicha premium', 'g', 0, 0, 0),
-  ('Salchichón', 'g', 0, 0, 0),
-  ('Salsa BBQ', 'g', 0, 0, 0),
-  ('Tomate', 'g', 0, 0, 0),
-  ('Tocino', 'g', 0, 0, 0)
-ON CONFLICT (name) DO NOTHING;
-
 -- Cash was explicitly requested for the current mobile trial. Do not activate
 -- the irreversible POS cutover; legacy and unified order history can coexist.
 UPDATE pos_capabilities

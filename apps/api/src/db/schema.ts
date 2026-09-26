@@ -482,6 +482,7 @@ export const businessEntries = pgTable('business_entries', {
   payment: text('payment').notNull().default(''),
   totalCents: integer('total_cents').notNull(),
   costCents: integer('cost_cents').notNull().default(0),
+  costPending: boolean('cost_pending').notNull().default(false),
   lines: jsonb('lines').$type<Record<string, unknown>[]>().notNull(),
   deviceId: uuid('device_id')
     .notNull()

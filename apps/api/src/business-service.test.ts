@@ -121,6 +121,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0018_manual_order_discounts.sql',
       '0019_menu_catalog_corrections.sql',
       '0020_mobile_pos_operability.sql',
+      '0021_inventory_catalog_and_negative_balances.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -221,6 +222,23 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     await pg.exec(
       "delete from products where id in ('aros-100','hawaiana','coca-cola','coca-cola-zero'); delete from modifiers where id='extra-papas-150'; delete from categories where id in ('dogs','sides','drinks')",
     );
+  });
+
+  it('inicia el catálogo de ingredientes con saldo cero y la migración se puede repetir', async () => {
+    const migration = await readFile(
+      new URL('../migrations/0020_inventory_catalog_and_negative_balances.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(migration);
+    await pg.exec(migration);
+    const rows = await sql<{ name: string; stock: string }[]>`
+      select name,stock::text from stock_ingredients where name in ('Mayonesa','Carne Angus','Papas','Pan de hamburguesa') order by name`;
+    expect(rows).toEqual([
+      { name: 'Carne Angus', stock: '0.000' },
+      { name: 'Mayonesa', stock: '0.000' },
+      { name: 'Pan de hamburguesa', stock: '0.000' },
+      { name: 'Papas', stock: '0.000' },
+    ]);
   });
 
   it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
@@ -905,9 +923,33 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     ).rejects.toThrow('Activa primero: stock_ledger');
   });
 
-  it('no inventa costos para ingredientes sin compras', async () => {
+  it('permite vender con saldo negativo y marca el costo pendiente si aún no hay costo', async () => {
     expect((await state()).products[0]!.cost_cents).toBeNull();
-    await expect(sale()).rejects.toThrow('Registra el costo de Carne');
+    const sold = await sale();
+    expect(sold.entry).toMatchObject({ cost_cents: 0, cost_pending: true });
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(-150);
+    expect((await state()).report).toMatchObject({
+      sales_count: 1,
+      cost_cents: '0',
+      uncosted_sales_count: 1,
+      uncosted_sales_cents: '10000',
+    });
+    await countStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        countedQuantity: '850',
+        unitCostCents: '10',
+        reason: 'Inventario inicial',
+      },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
+    expect((await state()).ingredients[0]).toMatchObject({
+      stock: '850.000',
+      value_cents: '8500.000000',
+    });
+    expect((await state()).report!.uncosted_sales_count).toBe(1);
   });
   it('promedia compras y conserva el costo histórico al reabastecer', async () => {
     await purchase(1000, 10000);
@@ -930,39 +972,26 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     });
     expect(after.products[0]!.cost_cents).not.toBe(2350);
   });
-  it('revierte todas las líneas si alguna receta no tiene costo registrado', async () => {
+  it('permite venta con saldo negativo si no hay reservas activas y conserva su costo', async () => {
     await purchase(200, 2000);
-    const sauce = randomUUID();
-    await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Salsa','g')", [sauce]);
-    await saveRecipe(sql, {
-      productId: 'burger',
-      targetMargin: 60,
-      overheadCents: 100,
-      priceCents: 10000,
-      lines: [
-        { ingredientId: ingredient, quantity: 150 },
-        { ingredientId: sauce, quantity: 2 },
-      ],
-    });
-    await expect(
-      recordEntry(
-        sql,
-        {
-          kind: 'sale',
-          expectedTotalCents: 20000,
-          description: 'No alcanza',
-          payment: 'cash',
-          idempotencyKey: randomUUID(),
-          lines: [
-            { productId: 'burger', quantity: 1 },
-            { productId: 'burger', quantity: 1 },
-          ],
-        },
-        device,
-      ),
-    ).rejects.toThrow('Registra el costo de Salsa');
-    expect(Number((await state()).ingredients[0]!.stock)).toBe(200);
-    expect((await state()).report!.sales_count).toBe(0);
+    const sold = await recordEntry(
+      sql,
+      {
+        kind: 'sale',
+        expectedTotalCents: 20000,
+        description: 'No alcanza',
+        payment: 'cash',
+        idempotencyKey: randomUUID(),
+        lines: [
+          { productId: 'burger', quantity: 1 },
+          { productId: 'burger', quantity: 1 },
+        ],
+      },
+      device,
+    );
+    expect(sold.entry).toMatchObject({ cost_cents: 3200, cost_pending: false });
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(-100);
+    expect((await state()).report!.sales_count).toBe(1);
   });
   it('reintentar compras y cobros no duplica movimientos', async () => {
     const purchaseKey = randomUUID(),

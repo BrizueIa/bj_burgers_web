@@ -93,6 +93,7 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
     }[] = [];
     let total = 0;
     let cost = 0;
+    let costPending = false;
     if (input.kind === 'purchase') {
       for (const line of input.lines) {
         const rows = await tx`with before as (
@@ -132,17 +133,25 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
           const consumed = await tx`with before as (
             select *, ${ingredient.quantity}::numeric*${line.quantity} as needed from stock_ingredients where id=${ingredient.ingredient_id} for update
           ) update stock_ingredients i set stock=b.stock-b.needed,
-            value_cents=case when b.stock<=b.needed then 0 else b.value_cents-(b.value_cents/b.stock)*b.needed end
-            from before b where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=b.needed))
+            value_cents=case when b.stock<=b.needed then 0
+              else b.value_cents-(b.value_cents/nullif(b.stock,0))*b.needed end
+            from before b where i.id=b.id
+              and (b.reserved=0 or b.stock-b.reserved>=b.needed)
             returning b.needed::text as quantity,
-              (least(greatest(b.stock,0),b.needed)*case when b.stock>0 then b.value_cents/b.stock else 0 end
-                + greatest(0,b.needed-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as cost,
+              case
+                when b.stock>0 and b.value_cents>0 then
+                  (b.value_cents/b.stock*least(b.stock,b.needed)
+                    + case when b.needed>b.stock then b.last_cost*(b.needed-b.stock) else 0 end)::text
+                when b.last_cost is not null then (b.last_cost*b.needed)::text
+                else null
+              end as cost,
               i.stock::text as stock_after, i.value_cents::text as value_after`;
           if (!consumed[0])
             throw new OrderError(
               409,
-              `Registra el costo de ${ingredient.name} con una compra antes de vender.`,
+              `La existencia de ${ingredient.name} está reservada por otra comanda.`,
             );
+          if (consumed[0].cost === null) costPending = true;
           ingredients.push({
             ingredientId: ingredient.ingredient_id,
             name: ingredient.name,
@@ -152,7 +161,7 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
           movements.push({
             id: ingredient.ingredient_id,
             quantity: `-${consumed[0].quantity}`,
-            value: `-${consumed[0].cost}`,
+            value: consumed[0].cost === null ? '0' : `-${consumed[0].cost}`,
             stockAfter: consumed[0].stock_after,
             valueAfter: consumed[0].value_after,
             type: 'sale',
@@ -178,23 +187,26 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
       const rows =
         await tx`with before as (select * from stock_ingredients where id=${input.ingredientId} for update)
         update stock_ingredients i set stock=b.stock-${input.quantity},
-        value_cents=case when b.stock<=${input.quantity}::numeric then 0 else b.value_cents-b.value_cents/b.stock*${input.quantity} end
-        from before b where i.id=b.id and (b.last_cost is not null or (b.stock>0 and b.stock>=${input.quantity}))
+        value_cents=case when b.stock<=${input.quantity} then 0
+          else b.value_cents-b.value_cents/nullif(b.stock,0)*${input.quantity} end
+        from before b where i.id=b.id and (b.reserved=0 or b.stock-b.reserved>=${input.quantity})
         returning b.name,
-          (least(greatest(b.stock,0),${input.quantity}::numeric)*case when b.stock>0 then b.value_cents/b.stock else 0 end
-            + greatest(0,${input.quantity}::numeric-greatest(b.stock,0))*coalesce(b.last_cost,0))::text as cost,
+          case
+            when b.stock>0 and b.value_cents>0 then
+              (b.value_cents/b.stock*least(b.stock,${input.quantity})
+                + case when ${input.quantity}>b.stock then b.last_cost*(${input.quantity}-b.stock) else 0 end)::text
+            when b.last_cost is not null then (b.last_cost*${input.quantity})::text
+            else null
+          end as cost,
           i.stock::text as stock_after, i.value_cents::text as value_after`;
-      if (!rows[0])
-        throw new OrderError(
-          409,
-          'Registra el costo de este ingrediente con una compra antes de registrar la merma.',
-        );
-      cost = Math.round(Number(rows[0].cost));
+      if (!rows[0]) throw new OrderError(409, 'La existencia está reservada por otra comanda.');
+      costPending = rows[0].cost === null;
+      cost = Math.round(Number(rows[0].cost ?? 0));
       snapshots.push({ ingredientId: input.ingredientId, quantity: input.quantity, ...rows[0] });
       movements.push({
         id: input.ingredientId,
         quantity: -input.quantity,
-        value: `-${rows[0].cost}`,
+        value: rows[0].cost === null ? '0' : `-${rows[0].cost}`,
         stockAfter: rows[0].stock_after,
         valueAfter: rows[0].value_after,
         type: 'waste',
@@ -209,8 +221,8 @@ export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, 
     if (total > 100000000 || cost > 100000000)
       throw new OrderError(400, 'El importe excede el máximo por operación.');
     const [entry] =
-      await tx`insert into business_entries(idempotency_key,request_payload,kind,description,payment,total_cents,cost_cents,lines,device_id)
-      values(${input.idempotencyKey},${tx.json(input)},${input.kind},${input.description},${input.kind === 'sale' ? input.payment : ''},${total},${cost},${tx.json(snapshots as JSONValue)},${deviceId}) returning *`;
+      await tx`insert into business_entries(idempotency_key,request_payload,kind,description,payment,total_cents,cost_cents,cost_pending,lines,device_id)
+      values(${input.idempotencyKey},${tx.json(input)},${input.kind},${input.description},${input.kind === 'sale' ? input.payment : ''},${total},${costPending ? 0 : cost},${costPending},${tx.json(snapshots as JSONValue)},${deviceId}) returning *`;
     for (const m of movements) {
       await tx`insert into stock_movements(entry_id,ingredient_id,quantity,value_cents) values(${entry!.id},${m.id},${m.quantity},${m.value})`;
       await appendMovement(tx as unknown as Sql, {
@@ -254,10 +266,13 @@ export async function businessState(sql: Sql, from: string, to: string) {
       await tx`select * from business_entries where created_at>=${from}::timestamptz and created_at<${to}::timestamptz order by created_at desc limit 200`;
     const [report] = await tx`select count(*) filter(where kind='sale')::int as sales_count,
       coalesce(sum(total_cents) filter(where kind='sale'),0)::text as revenue_cents,
-      coalesce(sum(cost_cents) filter(where kind='sale'),0)::text as cost_cents,
+      coalesce(sum(cost_cents) filter(where kind='sale' and not cost_pending),0)::text as cost_cents,
+      count(*) filter(where kind='sale' and cost_pending)::int as uncosted_sales_count,
+      coalesce(sum(total_cents) filter(where kind='sale' and cost_pending),0)::text as uncosted_sales_cents,
+      count(*) filter(where kind='waste' and cost_pending)::int as uncosted_waste_count,
       coalesce(sum(total_cents) filter(where kind='purchase'),0)::text as purchases_cents,
       coalesce(sum(total_cents) filter(where kind='expense'),0)::text as expenses_cents,
-      coalesce(sum(cost_cents) filter(where kind='waste'),0)::text as waste_cents
+      coalesce(sum(cost_cents) filter(where kind='waste' and not cost_pending),0)::text as waste_cents
       from business_entries where created_at>=${from}::timestamptz and created_at<${to}::timestamptz`;
     return {
       ingredients,
