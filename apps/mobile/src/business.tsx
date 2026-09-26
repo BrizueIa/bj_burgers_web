@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type { UnifiedOrderConfirm } from '@bj/contracts';
 import type { BusinessState } from '@bj/contracts';
 import { api } from './api';
 import { businessLoadErrorMessage } from './business-error';
 import { centsFromInput, money, numberValue, quantity, startOfToday } from './format';
+import { recipeTemplateForProduct } from './recipe-template';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
 
@@ -425,6 +426,11 @@ type Line = { id: string; name: string; quantity: number; totalCents?: number };
 export function BusinessEditor({ mode, productId }: { mode: BusinessMode; productId?: string }) {
   const range = useMemo(dayWindow, []);
   const { data, isLoading, error } = useBusiness(range);
+  const catalog = useQuery({
+    queryKey: ['catalog'],
+    queryFn: () => api.catalog(),
+    enabled: mode === 'recipe' && Boolean(productId),
+  });
   const capabilities = useQuery({
     queryKey: ['capabilities'],
     queryFn: () => api.capabilities(),
@@ -456,6 +462,12 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const hasExistingRecipe = Boolean(
     product && data?.recipes.some((line) => line.product_id === product.id),
   );
+  const menuProduct = catalog.data?.products.find((candidate) => candidate.id === product?.id);
+  const recipeTemplate = useMemo(
+    () =>
+      data && menuProduct ? recipeTemplateForProduct(menuProduct, data.ingredients) : undefined,
+    [data, menuProduct],
+  );
   const recipeVersionsEnabled = capabilities.data?.some(
     (capability) => capability.key === 'recipe_versions' && capability.enabled,
   );
@@ -467,18 +479,27 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     setTargetMargin(String(product.target_margin ?? 65));
     setOverhead(String((product.overhead_cents ?? 0) / 100));
     setPrice(String(product.price_cents / 100));
-    setLines(
-      data.recipes
-        .filter((line) => line.product_id === product.id)
-        .map((line) => ({
-          id: line.ingredient_id,
-          name:
-            data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
-            line.ingredient_id,
-          quantity: numberValue(line.quantity),
-        })),
-    );
-  }, [data, lines.length, mode, product]);
+    const savedLines = data.recipes
+      .filter((line) => line.product_id === product.id)
+      .map((line) => ({
+        id: line.ingredient_id,
+        name:
+          data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
+          line.ingredient_id,
+        quantity: numberValue(line.quantity),
+      }));
+    if (!recipeTemplate) {
+      if (savedLines.length) setLines(savedLines);
+      return;
+    }
+    const savedById = new Map(savedLines.map((line) => [line.id, line]));
+    const menuLines = recipeTemplate.lines.map((ingredient) => ({
+      ...ingredient,
+      quantity: savedById.get(ingredient.id)?.quantity ?? 0,
+    }));
+    const menuIds = new Set(menuLines.map((line) => line.id));
+    setLines([...menuLines, ...savedLines.filter((line) => !menuIds.has(line.id))]);
+  }, [data, lines.length, mode, product, recipeTemplate]);
   if (isLoading) return <Loading />;
   if (!data)
     return (
@@ -540,7 +561,22 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     }
     if (mode === 'recipe') {
       if (!product || !lines.length) {
-        setMessage('Agrega al menos un ingrediente a la receta.');
+        setMessage('No se encontraron ingredientes para esta receta.');
+        return;
+      }
+      if (recipeTemplate?.missingNames.length) {
+        setMessage(
+          `Registra primero estos ingredientes: ${recipeTemplate.missingNames.join(', ')}.`,
+        );
+        return;
+      }
+      const incomplete = lines.filter(
+        (line) => !Number.isFinite(line.quantity) || line.quantity <= 0,
+      );
+      if (incomplete.length) {
+        setMessage(
+          `Completa una cantidad mayor que cero para: ${incomplete.map((line) => line.name).join(', ')}.`,
+        );
         return;
       }
       return {
@@ -743,10 +779,31 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     <ScrollScreen>
       <SectionTitle title={heading} />
       {mode === 'recipe' && !hasExistingRecipe ? (
-        <Notice>
-          Agrega los ingredientes y cantidades por producto. Los ingredientes del menú ya están
-          registrados con existencia en cero; captura una compra para registrar su costo real.
-        </Notice>
+        <>
+          <Notice>
+            Los ingredientes del menú se cargan como plantilla con cantidad cero. Completa las
+            porciones reales antes de guardar; el costo no se estima con cantidades inventadas.
+          </Notice>
+        </>
+      ) : null}
+      {mode === 'recipe' ? (
+        <>
+          {recipeTemplate?.missingNames.length ? (
+            <Notice kind="error">
+              Faltan en inventario: {recipeTemplate.missingNames.join(', ')}. Registra esos
+              ingredientes antes de completar la receta.
+            </Notice>
+          ) : recipeTemplate ? (
+            <Notice>
+              {recipeTemplate.lines.length} ingredientes detectados para esta receta. Revisa los
+              renglones y completa cada cantidad en su unidad base.
+            </Notice>
+          ) : catalog.isLoading ? (
+            <Notice>Buscando ingredientes del menú…</Notice>
+          ) : (
+            <Notice kind="error">No se pudo cargar la plantilla de ingredientes del menú.</Notice>
+          )}
+        </>
       ) : null}
       <Text style={shared.subtitle}>
         {mode === 'sale'
@@ -1004,13 +1061,39 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           ) : null}
           {lines.map((line) => (
             <View key={line.id} style={styles.line}>
-              <Text style={shared.text}>
-                {line.name} · {quantity(line.quantity)}{' '}
-                {mode === 'sale'
-                  ? 'pz'
-                  : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
-                {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
-              </Text>
+              {mode === 'recipe' ? (
+                <View style={styles.recipeLine}>
+                  <Text style={[shared.text, styles.recipeLineName]}>
+                    {line.name} · {data.ingredients.find((item) => item.id === line.id)?.unit ?? ''}
+                  </Text>
+                  <TextInput
+                    accessibilityLabel={`Cantidad por producto de ${line.name}`}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={colors.muted}
+                    value={line.quantity > 0 ? String(line.quantity) : ''}
+                    onChangeText={(value) => {
+                      const parsed = Number(value.replace(',', '.'));
+                      setLines((current) =>
+                        current.map((item) =>
+                          item.id === line.id
+                            ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
+                            : item,
+                        ),
+                      );
+                    }}
+                    style={styles.recipeQuantity}
+                  />
+                </View>
+              ) : (
+                <Text style={shared.text}>
+                  {line.name} · {quantity(line.quantity)}{' '}
+                  {mode === 'sale'
+                    ? 'pz'
+                    : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
+                  {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
+                </Text>
+              )}
               <Button
                 label="Quitar"
                 secondary
@@ -1075,4 +1158,18 @@ const styles = StyleSheet.create({
   actions: { gap: 8 },
   price: { color: colors.gold, fontSize: 18, fontWeight: '800' },
   line: { gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  recipeLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  recipeLineName: { flex: 1 },
+  recipeQuantity: {
+    width: 92,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    color: colors.text,
+    backgroundColor: '#101510',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 16,
+    textAlign: 'right',
+  },
 });
