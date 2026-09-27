@@ -213,7 +213,11 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       {section === 'home' ? (
         <>
           <View style={styles.actions}>
-            <Button label="Nueva venta · POS" onPress={() => router.push('/(app)/pos')} />
+            <Button
+              label="Nueva venta · POS"
+              disabled={!unifiedOrdersEnabled}
+              onPress={() => router.push('/(app)/pos')}
+            />
             <Button label="Registrar compra" secondary onPress={() => openEditor('purchase')} />
             <Button label="Comandas" secondary onPress={() => router.push('/(app)/orders')} />
             <Button label="Registrar gasto" secondary onPress={() => openEditor('expense')} />
@@ -422,7 +426,20 @@ function EntryCard({ entry }: { entry: BusinessState['entries'][number] }) {
   );
 }
 
-type Line = { id: string; name: string; quantity: number; totalCents?: number };
+type Line = {
+  id: string;
+  name: string;
+  quantity: number;
+  kind?: 'ingredient' | 'modifier';
+  ingredientId?: string;
+  modifierId?: string;
+  removable?: boolean;
+  extra?: boolean;
+  inventoryName?: string;
+  totalCents?: number;
+  multiplicity?: number;
+  suggestedQuantity?: number;
+};
 export function BusinessEditor({ mode, productId }: { mode: BusinessMode; productId?: string }) {
   const range = useMemo(dayWindow, []);
   const { data, isLoading, error } = useBusiness(range);
@@ -435,6 +452,14 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     queryKey: ['capabilities'],
     queryFn: () => api.capabilities(),
     staleTime: 60_000,
+  });
+  const recipeVersionsEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'recipe_versions' && capability.enabled,
+  );
+  const recipeVersions = useQuery({
+    queryKey: ['recipe-versions', productId],
+    queryFn: () => api.recipeVersions(productId),
+    enabled: mode === 'recipe' && Boolean(productId) && recipeVersionsEnabled === true,
   });
   const client = useQueryClient();
   const [description, setDescription] = useState('');
@@ -459,35 +484,78 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const product = data?.products.find((item) => item.id === productId);
+  const activeRecipeVersion = recipeVersions.data?.versions.find(
+    (version) => version.product_id === productId && version.status === 'active',
+  );
   const hasExistingRecipe = Boolean(
-    product && data?.recipes.some((line) => line.product_id === product.id),
+    product &&
+    (activeRecipeVersion || data?.recipes.some((line) => line.product_id === product.id)),
   );
   const menuProduct = catalog.data?.products.find((candidate) => candidate.id === product?.id);
   const recipeTemplate = useMemo(
     () =>
-      data && menuProduct ? recipeTemplateForProduct(menuProduct, data.ingredients) : undefined,
-    [data, menuProduct],
-  );
-  const recipeVersionsEnabled = capabilities.data?.some(
-    (capability) => capability.key === 'recipe_versions' && capability.enabled,
+      data && menuProduct
+        ? recipeTemplateForProduct(menuProduct, data.ingredients, catalog.data?.modifiers ?? [])
+        : undefined,
+    [catalog.data?.modifiers, data, menuProduct],
   );
   const unifiedOrdersEnabled = capabilities.data?.some(
     (capability) => capability.key === 'unified_orders' && capability.enabled,
   );
   useEffect(() => {
     if (mode !== 'recipe' || !data || !product || lines.length) return;
+    if (recipeVersionsEnabled === undefined) return;
+    if (recipeVersionsEnabled && (recipeVersions.isLoading || recipeVersions.isError)) return;
     setTargetMargin(String(product.target_margin ?? 65));
     setOverhead(String((product.overhead_cents ?? 0) / 100));
     setPrice(String(product.price_cents / 100));
-    const savedLines = data.recipes
-      .filter((line) => line.product_id === product.id)
-      .map((line) => ({
-        id: line.ingredient_id,
-        name:
-          data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
-          line.ingredient_id,
-        quantity: numberValue(line.quantity),
-      }));
+    const savedComponents = recipeVersionsEnabled
+      ? (recipeVersions.data?.components.filter(
+          (component) => component.recipe_version_id === activeRecipeVersion?.id,
+        ) ?? [])
+      : [];
+    const savedLines = recipeVersionsEnabled
+      ? savedComponents
+          .filter((component) => component.ingredient_id && component.component_kind !== 'modifier')
+          .map((component) => ({
+            id: component.ingredient_id!,
+            name: component.component_name,
+            quantity: numberValue(component.quantity),
+            kind: 'ingredient' as const,
+            ingredientId: component.ingredient_id!,
+            removable: component.removable,
+          }))
+      : data.recipes
+          .filter((line) => line.product_id === product.id)
+          .map((line) => ({
+            id: line.ingredient_id,
+            name:
+              data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
+              line.ingredient_id,
+            quantity: numberValue(line.quantity),
+            kind: 'ingredient' as const,
+          }));
+    const savedExtras = recipeVersionsEnabled
+      ? savedComponents
+          .filter(
+            (component) =>
+              component.component_kind === 'modifier' &&
+              component.modifier_id &&
+              component.ingredient_id,
+          )
+          .map((component) => ({
+            id: `modifier:${component.modifier_id}`,
+            name: component.component_name,
+            quantity: numberValue(component.quantity),
+            kind: 'modifier' as const,
+            modifierId: component.modifier_id!,
+            ingredientId: component.ingredient_id!,
+            inventoryName:
+              data.ingredients.find((ingredient) => ingredient.id === component.ingredient_id)
+                ?.name ?? component.ingredient_id!,
+            extra: true,
+          }))
+      : [];
     if (!recipeTemplate) {
       if (savedLines.length) setLines(savedLines);
       return;
@@ -495,11 +563,33 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     const savedById = new Map(savedLines.map((line) => [line.id, line]));
     const menuLines = recipeTemplate.lines.map((ingredient) => ({
       ...ingredient,
-      quantity: savedById.get(ingredient.id)?.quantity ?? 0,
+      quantity: savedById.get(ingredient.id)?.quantity ?? ingredient.suggestedQuantity ?? 0,
+    }));
+    const savedExtrasById = new Map(savedExtras.map((line) => [line.modifierId, line]));
+    const menuExtras = recipeTemplate.extras.map((extra) => ({
+      ...extra,
+      quantity: savedExtrasById.get(extra.modifierId)?.quantity ?? extra.suggestedQuantity ?? 0,
     }));
     const menuIds = new Set(menuLines.map((line) => line.id));
-    setLines([...menuLines, ...savedLines.filter((line) => !menuIds.has(line.id))]);
-  }, [data, lines.length, mode, product, recipeTemplate]);
+    const extraIds = new Set(menuExtras.map((line) => line.modifierId));
+    setLines([
+      ...menuLines,
+      ...savedLines.filter((line) => !menuIds.has(line.id)),
+      ...menuExtras,
+      ...savedExtras.filter((line) => !extraIds.has(line.modifierId!)),
+    ]);
+  }, [
+    activeRecipeVersion?.id,
+    data,
+    lines.length,
+    mode,
+    product,
+    recipeTemplate,
+    recipeVersions.data,
+    recipeVersions.isError,
+    recipeVersions.isLoading,
+    recipeVersionsEnabled,
+  ]);
   if (isLoading) return <Loading />;
   if (!data)
     return (
@@ -560,6 +650,12 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       return { name: description.trim(), unit, minimum: Number(minimum.replace(',', '.')) || 0 };
     }
     if (mode === 'recipe') {
+      if (!recipeVersionsEnabled) {
+        setMessage(
+          'El servidor debe habilitar versiones de recetas antes de guardar una receta POS.',
+        );
+        return;
+      }
       if (!product || !lines.length) {
         setMessage('No se encontraron ingredientes para esta receta.');
         return;
@@ -571,11 +667,13 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         return;
       }
       const incomplete = lines.filter(
-        (line) => !Number.isFinite(line.quantity) || line.quantity <= 0,
+        (line) =>
+          (!line.extra && (!Number.isFinite(line.quantity) || line.quantity <= 0)) ||
+          (line.extra && (!Number.isFinite(line.quantity) || line.quantity < 0)),
       );
       if (incomplete.length) {
         setMessage(
-          `Completa una cantidad mayor que cero para: ${incomplete.map((line) => line.name).join(', ')}.`,
+          `Completa las cantidades base y corrige los extras negativos: ${incomplete.map((line) => line.name).join(', ')}.`,
         );
         return;
       }
@@ -584,7 +682,16 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         targetMargin: Math.round(Number(targetMargin) || 0),
         overheadCents: centsFromInput(overhead),
         priceCents: centsFromInput(price),
-        lines: lines.map((line) => ({ ingredientId: line.id, quantity: line.quantity })),
+        components: lines
+          .filter((line) => line.quantity > 0)
+          .map((line) => ({
+            kind: line.kind ?? 'ingredient',
+            ingredientId: line.ingredientId ?? (line.kind === 'modifier' ? undefined : line.id),
+            modifierId: line.modifierId,
+            quantity: line.quantity,
+            removable: line.removable ?? false,
+            extra: line.extra ?? false,
+          })),
         idempotencyKey: createIdempotencyKey(),
       };
     }
@@ -712,24 +819,32 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           input as { name: string; unit: 'g' | 'ml' | 'pz'; minimum: number },
         );
       else if (mode === 'recipe') {
-        if (recipeVersionsEnabled)
-          await api.createRecipeVersion({
-            idempotencyKey: input.idempotencyKey as string,
-            productId: input.productId as string,
-            targetMargin: input.targetMargin as number,
-            overheadCents: input.overheadCents as number,
-            priceCents: input.priceCents as number,
-            components: (input.lines as Array<{ ingredientId: string; quantity: number }>).map(
-              (line) => ({
-                kind: 'ingredient' as const,
-                ingredientId: line.ingredientId,
-                quantity: line.quantity.toFixed(3),
-                removable: false,
-                extra: false,
-              }),
-            ),
-          });
-        else await api.saveRecipe(input as never);
+        if (!recipeVersionsEnabled)
+          throw new Error('El servidor no habilita recetas POS completas.');
+        await api.createRecipeVersion({
+          idempotencyKey: input.idempotencyKey as string,
+          productId: input.productId as string,
+          targetMargin: input.targetMargin as number,
+          overheadCents: input.overheadCents as number,
+          priceCents: input.priceCents as number,
+          components: (
+            input.components as Array<{
+              kind: 'ingredient' | 'modifier';
+              ingredientId?: string;
+              modifierId?: string;
+              quantity: number;
+              removable: boolean;
+              extra: boolean;
+            }>
+          ).map((component) => ({
+            kind: component.kind,
+            ...(component.ingredientId ? { ingredientId: component.ingredientId } : {}),
+            ...(component.modifierId ? { modifierId: component.modifierId } : {}),
+            quantity: component.quantity.toFixed(3),
+            removable: component.removable,
+            extra: component.extra,
+          })),
+        });
       } else if (mode === 'production') {
         await api.createProductionBatch(input as never);
       } else if (mode === 'count') await api.countStock(input as never);
@@ -753,6 +868,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         return;
       } else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
+      await client.invalidateQueries({ queryKey: ['recipe-versions', productId] });
       router.back();
     } catch (cause) {
       if (cause instanceof BjApiError && !cause.ambiguous) setPending(undefined);
@@ -795,14 +911,17 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
             </Notice>
           ) : recipeTemplate ? (
             <Notice>
-              {recipeTemplate.lines.length} ingredientes detectados para esta receta. Revisa los
-              renglones y completa cada cantidad en su unidad base.
+              {recipeTemplate.lines.length} ingredientes base. Captura cantidades por producto; cada
+              extra puede quedar en cero hasta definir su porción física.
             </Notice>
           ) : catalog.isLoading ? (
             <Notice>Buscando ingredientes del menú…</Notice>
           ) : (
             <Notice kind="error">No se pudo cargar la plantilla de ingredientes del menú.</Notice>
           )}
+          {recipeVersionsEnabled && recipeVersions.isError ? (
+            <Notice kind="error">No se pudo leer la versión activa de esta receta.</Notice>
+          ) : null}
         </>
       ) : null}
       <Text style={shared.subtitle}>
@@ -945,7 +1064,12 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
               La receta se guardará como una nueva versión y actualizará el costo y el precio de
               lista del producto.
             </Notice>
-          ) : null}
+          ) : (
+            <Notice kind="warning">
+              El servidor todavía no habilita el versionado de recetas. No guardes datos de costo
+              hasta actualizar la API.
+            </Notice>
+          )}
           <Field
             label="Margen objetivo (%)"
             keyboardType="number-pad"
@@ -1005,107 +1129,162 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       ) : null}
       {requiresLines || mode === 'waste' ? (
         <Card>
-          <Text style={shared.text}>{mode === 'sale' ? 'Productos' : 'Ingredientes'}</Text>
-          <Field
-            label={mode === 'sale' ? 'Buscar producto' : 'Buscar ingrediente'}
-            value={lineSearch}
-            onChangeText={(value) => {
-              setLineSearch(value);
-              setShowAllChoices(false);
-            }}
-          />
-          <View style={styles.row}>
-            {visibleSource.map((item) => (
-              <Pill
-                key={item.id}
-                label={item.name}
-                selected={selectedId === item.id}
-                onPress={() => setSelectedId(item.id)}
-              />
-            ))}
-          </View>
-          {!lineSearch.trim() && filteredSource.length > 8 ? (
-            <Button
-              label={showAllChoices ? 'Mostrar menos' : `Ver todos (${filteredSource.length})`}
-              secondary
-              onPress={() => setShowAllChoices((current) => !current)}
-            />
-          ) : null}
-          <Field
-            label={
-              mode === 'sale'
-                ? 'Cantidad de productos'
-                : mode === 'count'
-                  ? 'Existencia contada (puede ser negativa)'
-                  : 'Cantidad en unidad base'
-            }
-            keyboardType={mode === 'count' ? 'default' : 'decimal-pad'}
-            value={lineQuantity}
-            onChangeText={setLineQuantity}
-          />
-          {mode === 'purchase' ? (
-            <Field
-              label="Total pagado por este ingrediente (MXN)"
-              keyboardType="decimal-pad"
-              value={lineTotal}
-              onChangeText={setLineTotal}
-            />
-          ) : null}
-          {requiresLines ? (
-            <Button
-              label="Agregar línea"
-              secondary
-              disabled={mode === 'sale' && Boolean(pending)}
-              onPress={addLine}
-            />
-          ) : null}
-          {lines.map((line) => (
-            <View key={line.id} style={styles.line}>
-              {mode === 'recipe' ? (
-                <View style={styles.recipeLine}>
-                  <Text style={[shared.text, styles.recipeLineName]}>
-                    {line.name} · {data.ingredients.find((item) => item.id === line.id)?.unit ?? ''}
-                  </Text>
-                  <TextInput
-                    accessibilityLabel={`Cantidad por producto de ${line.name}`}
-                    keyboardType="decimal-pad"
-                    placeholder="0"
-                    placeholderTextColor={colors.muted}
-                    value={line.quantity > 0 ? String(line.quantity) : ''}
-                    onChangeText={(value) => {
-                      const parsed = Number(value.replace(',', '.'));
-                      setLines((current) =>
-                        current.map((item) =>
-                          item.id === line.id
-                            ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
-                            : item,
-                        ),
-                      );
-                    }}
-                    style={styles.recipeQuantity}
-                  />
-                </View>
-              ) : (
-                <Text style={shared.text}>
-                  {line.name} · {quantity(line.quantity)}{' '}
-                  {mode === 'sale'
-                    ? 'pz'
-                    : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
-                  {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
-                </Text>
-              )}
-              <Button
-                label="Quitar"
-                secondary
-                disabled={mode === 'sale' && Boolean(pending)}
-                onPress={() => {
-                  setLines((current) => current.filter((item) => item.id !== line.id));
+          <Text style={shared.text}>
+            {mode === 'recipe'
+              ? 'Ingredientes base'
+              : mode === 'sale'
+                ? 'Productos'
+                : 'Ingredientes'}
+          </Text>
+          {mode === 'recipe' ? (
+            <>
+              {lines
+                .filter((line) => !line.extra)
+                .map((line) => (
+                  <View key={line.id} style={styles.recipeLine}>
+                    <Text style={[shared.text, styles.recipeLineName]}>
+                      {line.name}
+                      {line.multiplicity !== undefined && line.multiplicity !== 1
+                        ? ` ×${line.multiplicity}`
+                        : ''}
+                      {' · '}
+                      {data.ingredients.find((item) => item.id === (line.ingredientId ?? line.id))
+                        ?.unit ?? ''}
+                      {line.removable ? ' · se puede retirar' : ''}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel={`Cantidad por producto de ${line.name}`}
+                      keyboardType="decimal-pad"
+                      placeholder="0"
+                      placeholderTextColor={colors.muted}
+                      value={line.quantity > 0 ? String(line.quantity) : ''}
+                      onChangeText={(value) => {
+                        const parsed = Number(value.replace(',', '.'));
+                        setLines((current) =>
+                          current.map((item) =>
+                            item.id === line.id
+                              ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
+                              : item,
+                          ),
+                        );
+                      }}
+                      style={styles.recipeQuantity}
+                    />
+                  </View>
+                ))}
+              <Text style={shared.label}>Extras opcionales que consumen inventario</Text>
+              {lines
+                .filter((line) => line.extra)
+                .map((line) => (
+                  <View key={line.id} style={styles.recipeLine}>
+                    <Text style={[shared.text, styles.recipeLineName]}>
+                      {line.name} ·{' '}
+                      {line.inventoryName ??
+                        data.ingredients.find((item) => item.id === line.ingredientId)?.name ??
+                        ''}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel={`Cantidad del extra ${line.name}`}
+                      keyboardType="decimal-pad"
+                      placeholder="0"
+                      placeholderTextColor={colors.muted}
+                      value={line.quantity > 0 ? String(line.quantity) : ''}
+                      onChangeText={(value) => {
+                        const parsed = Number(value.replace(',', '.'));
+                        setLines((current) =>
+                          current.map((item) =>
+                            item.id === line.id
+                              ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
+                              : item,
+                          ),
+                        );
+                      }}
+                      style={styles.recipeQuantity}
+                    />
+                    <Text style={shared.subtitle}>
+                      {data.ingredients.find((item) => item.id === line.ingredientId)?.unit ?? ''}
+                    </Text>
+                  </View>
+                ))}
+            </>
+          ) : (
+            <>
+              <Field
+                label={mode === 'sale' ? 'Buscar producto' : 'Buscar ingrediente'}
+                value={lineSearch}
+                onChangeText={(value) => {
+                  setLineSearch(value);
+                  setShowAllChoices(false);
                 }}
               />
-            </View>
-          ))}
+              <View style={styles.row}>
+                {visibleSource.map((item) => (
+                  <Pill
+                    key={item.id}
+                    label={item.name}
+                    selected={selectedId === item.id}
+                    onPress={() => setSelectedId(item.id)}
+                  />
+                ))}
+              </View>
+              {!lineSearch.trim() && filteredSource.length > 8 ? (
+                <Button
+                  label={showAllChoices ? 'Mostrar menos' : `Ver todos (${filteredSource.length})`}
+                  secondary
+                  onPress={() => setShowAllChoices((current) => !current)}
+                />
+              ) : null}
+              <Field
+                label={
+                  mode === 'sale'
+                    ? 'Cantidad de productos'
+                    : mode === 'count'
+                      ? 'Existencia contada (puede ser negativa)'
+                      : 'Cantidad en unidad base'
+                }
+                keyboardType={mode === 'count' ? 'default' : 'decimal-pad'}
+                value={lineQuantity}
+                onChangeText={setLineQuantity}
+              />
+              {mode === 'purchase' ? (
+                <Field
+                  label="Total pagado por este ingrediente (MXN)"
+                  keyboardType="decimal-pad"
+                  value={lineTotal}
+                  onChangeText={setLineTotal}
+                />
+              ) : null}
+              {requiresLines ? (
+                <Button
+                  label="Agregar línea"
+                  secondary
+                  disabled={mode === 'sale' && Boolean(pending)}
+                  onPress={addLine}
+                />
+              ) : null}
+              {lines.map((line) => (
+                <View key={line.id} style={styles.line}>
+                  <Text style={shared.text}>
+                    {line.name} · {quantity(line.quantity)}{' '}
+                    {mode === 'sale'
+                      ? 'pz'
+                      : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
+                    {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
+                  </Text>
+                  <Button
+                    label="Quitar"
+                    secondary
+                    disabled={mode === 'sale' && Boolean(pending)}
+                    onPress={() =>
+                      setLines((current) => current.filter((item) => item.id !== line.id))
+                    }
+                  />
+                </View>
+              ))}
+            </>
+          )}
         </Card>
-      ) : null}
+      ) : null}{' '}
       {mode === 'sale' && lines.length ? (
         <Metric
           label="Total a cobrar"
@@ -1142,7 +1321,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                     : 'Confirmar cobro y descontar inventario'
                   : 'Guardar'
         }
-        disabled={busy}
+        disabled={busy || (mode === 'recipe' && recipeVersionsEnabled !== true)}
         onPress={() => void save()}
       />
     </ScrollScreen>

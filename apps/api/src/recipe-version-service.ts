@@ -98,13 +98,12 @@ export async function createRecipeVersion(
       await transaction`insert into product_recipes(product_id,target_margin,overhead_cents)
         values(${input.productId},${input.targetMargin},${input.overheadCents})
         on conflict(product_id) do update set target_margin=excluded.target_margin,overhead_cents=excluded.overhead_cents`;
-      if (
-        input.components.every(
-          (component) => component.kind === 'ingredient' || component.kind === 'packaging',
-        )
-      ) {
+      if (input.components.every((component) => component.kind !== 'product')) {
         await transaction`delete from recipe_lines where product_id=${input.productId}`;
-        for (const component of input.components)
+        for (const component of input.components.filter(
+          (candidate) =>
+            (candidate.kind === 'ingredient' || candidate.kind === 'packaging') && !candidate.extra,
+        ))
           await transaction`insert into recipe_lines(product_id,ingredient_id,quantity)
             values(${input.productId},${component.ingredientId!},${component.quantity})`;
       }
@@ -150,7 +149,9 @@ export async function recipeVersionState(sql: Sql, productId?: string) {
       extra: boolean;
     }>
   >`select c.recipe_version_id,c.component_kind,c.ingredient_id,c.component_product_id,c.modifier_id,
-      coalesce(i.name,p.name,m.name) as component_name,c.quantity,c.removable,c.extra
+      case when m.name is not null and i.name is not null then m.name || ' → ' || i.name
+        else coalesce(i.name,p.name,m.name) end as component_name,
+      c.quantity,c.removable,c.extra
     from recipe_version_components c
     join recipe_versions v on v.id=c.recipe_version_id
     left join stock_ingredients i on i.id=c.ingredient_id

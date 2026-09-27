@@ -466,6 +466,14 @@ async function resolveInventoryRequirements(
           [...stack, productId],
           composition,
         );
+      else if (component.component_kind === 'modifier') {
+        if (!component.ingredient_id)
+          throw new OrderError(
+            409,
+            `El extra ${component.component_name} no tiene costo de inventario configurado.`,
+          );
+        add(component.ingredient_id, quantity, 'ingredient');
+      }
     }
     for (const modifierId of modifierIds) {
       if (!components.some((component) => component.extra && component.modifier_id === modifierId))

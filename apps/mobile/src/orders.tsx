@@ -4,7 +4,16 @@ import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { Share, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Modal,
+  Pressable,
+  Share,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type {
   Catalog,
@@ -754,6 +763,26 @@ function DraftItemEditor({
   onRemove(): void;
 }) {
   const product = catalog.products.find((candidate) => candidate.id === item.productId);
+  const recipe = useQuery({
+    queryKey: ['recipe-versions', item.productId],
+    queryFn: () => api.recipeVersions(item.productId),
+  });
+  const activeVersion = recipe.data?.versions.find(
+    (version) => version.product_id === item.productId && version.status === 'active',
+  );
+  const configuredModifierIds = new Set(
+    activeVersion
+      ? (recipe.data?.components
+          .filter(
+            (component) =>
+              component.recipe_version_id === activeVersion.id &&
+              component.component_kind === 'modifier' &&
+              component.modifier_id &&
+              component.extra,
+          )
+          .map((component) => component.modifier_id!) ?? [])
+      : [],
+  );
   const toggle = <T,>(list: T[], value: T) =>
     list.includes(value) ? list.filter((itemValue) => itemValue !== value) : [...list, value];
   return (
@@ -794,20 +823,32 @@ function DraftItemEditor({
         </>
       ) : null}
       <Text style={shared.label}>Extras</Text>
-      <View style={styles.row}>
-        {catalog.modifiers
-          .filter((modifier) => modifier.available)
-          .map((modifier) => (
-            <Pill
-              key={modifier.id}
-              label={`${modifier.name} ${money(modifier.priceCents)}`}
-              selected={item.modifierIds.includes(modifier.id)}
-              onPress={() =>
-                onChange({ ...item, modifierIds: toggle(item.modifierIds, modifier.id) })
-              }
-            />
-          ))}
-      </View>
+      {recipe.isLoading ? (
+        <Text style={shared.subtitle}>Validando qué extras consume esta receta…</Text>
+      ) : recipe.isError ? (
+        <Notice kind="error">No se pudo validar la receta activa y sus extras.</Notice>
+      ) : !activeVersion ? (
+        <Notice kind="warning">Configura una receta activa antes de vender este producto.</Notice>
+      ) : configuredModifierIds.size ? (
+        <View style={styles.row}>
+          {catalog.modifiers
+            .filter((modifier) => modifier.available && configuredModifierIds.has(modifier.id))
+            .map((modifier) => (
+              <Pill
+                key={modifier.id}
+                label={`${modifier.name} ${money(modifier.priceCents)}`}
+                selected={item.modifierIds.includes(modifier.id)}
+                onPress={() =>
+                  onChange({ ...item, modifierIds: toggle(item.modifierIds, modifier.id) })
+                }
+              />
+            ))}
+        </View>
+      ) : (
+        <Text style={shared.subtitle}>
+          Esta receta todavía no tiene extras con porción configurada.
+        </Text>
+      )}
       {product?.comboEligible ? (
         <Pill
           label="Convertir en combo"
@@ -1047,6 +1088,7 @@ export function OrderBuilder() {
   const [message, setMessage] = useState<string>();
   const [search, setSearch] = useState('');
   const [categoryId, setCategoryId] = useState('burgers');
+  const [cartOpen, setCartOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const { width } = useWindowDimensions();
   const tablet = width >= 760;
@@ -1055,6 +1097,35 @@ export function OrderBuilder() {
     capabilities.data?.some(
       (capability) => capability.key === 'unified_orders' && capability.enabled,
     ) === true;
+  const modifierTarget = items.reduce<{ item: DraftItem; index: number } | undefined>(
+    (target, item, index) => {
+      const product = catalog.data?.products.find((candidate) => candidate.id === item.productId);
+      return product?.categoryId !== 'drinks' ? { item, index } : target;
+    },
+    undefined,
+  );
+  const modifierRecipe = useQuery({
+    queryKey: ['recipe-versions', modifierTarget?.item.productId],
+    queryFn: () => api.recipeVersions(modifierTarget!.item.productId),
+    enabled: Boolean(modifierTarget && enabled),
+  });
+  const modifierVersion = modifierRecipe.data?.versions.find(
+    (version) =>
+      version.product_id === modifierTarget?.item.productId && version.status === 'active',
+  );
+  const configuredModifiers = new Set(
+    modifierVersion
+      ? (modifierRecipe.data?.components
+          .filter(
+            (component) =>
+              component.recipe_version_id === modifierVersion.id &&
+              component.component_kind === 'modifier' &&
+              component.modifier_id &&
+              component.extra,
+          )
+          .map((component) => component.modifier_id!) ?? [])
+      : [],
+  );
 
   const updateItem = (index: number, next: DraftItem) => {
     pending.current = undefined;
@@ -1064,6 +1135,7 @@ export function OrderBuilder() {
   const addProduct = (product: Catalog['products'][number]) => {
     pending.current = undefined;
     setQuote(undefined);
+    setMessage(undefined);
     setItems((current) => [
       ...current,
       {
@@ -1078,12 +1150,28 @@ export function OrderBuilder() {
     ]);
   };
   const addModifier = (modifierId: string) => {
-    const targetIndex = items.reduce((lastIndex, item, index) => {
-      const product = catalog.data?.products.find((candidate) => candidate.id === item.productId);
-      return product?.categoryId !== 'drinks' ? index : lastIndex;
-    }, -1);
-    if (targetIndex < 0) {
+    if (!modifierTarget) {
       setMessage('Agrega primero una hamburguesa, hot dog o complemento para asignar el extra.');
+      return;
+    }
+    if (!modifierVersion) {
+      setMessage(
+        `Configura una receta activa para ${modifierTarget.item.productName} antes de vender extras.`,
+      );
+      return;
+    }
+    if (!configuredModifiers.has(modifierId)) {
+      const modifier = catalog.data?.modifiers.find((candidate) => candidate.id === modifierId);
+      setMessage(
+        `${modifier?.name ?? 'Este extra'} aún no tiene una porción de inventario configurada para ${modifierTarget.item.productName}.`,
+      );
+      return;
+    }
+    if (modifierTarget.item.modifierIds.includes(modifierId)) {
+      const modifier = catalog.data?.modifiers.find((candidate) => candidate.id === modifierId);
+      setMessage(
+        `${modifier?.name ?? 'El extra'} ya está agregado a ${modifierTarget.item.productName}.`,
+      );
       return;
     }
     pending.current = undefined;
@@ -1091,7 +1179,7 @@ export function OrderBuilder() {
     setMessage(undefined);
     setItems((current) =>
       current.map((item, index) =>
-        index === targetIndex && !item.modifierIds.includes(modifierId)
+        index === modifierTarget.index
           ? { ...item, modifierIds: [...item.modifierIds, modifierId] }
           : item,
       ),
@@ -1190,16 +1278,87 @@ export function OrderBuilder() {
       product.categoryId === categoryId &&
       product.name.toLocaleLowerCase('es-MX').includes(searchTerm),
   );
+  const extras = catalog.data.modifiers.filter(
+    (modifier) =>
+      modifier.available &&
+      modifier.name.toLocaleLowerCase('es-MX').includes(searchTerm) &&
+      configuredModifiers.has(modifier.id),
+  );
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+  const cartContents = (tabletPanel = false) => (
+    <ScrollView
+      style={[styles.cartPane, tabletPanel && styles.cartPaneTablet]}
+      contentContainerStyle={styles.cartContent}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={shared.text}>Venta actual · {itemCount} artículo(s)</Text>
+      {!items.length ? (
+        <Text style={shared.subtitle}>Agrega productos desde el catálogo.</Text>
+      ) : null}
+      {items.map((item, index) => (
+        <DraftItemEditor
+          key={`${item.productId}-${index}`}
+          item={item}
+          catalog={catalog.data!}
+          onChange={(next) => updateItem(index, next)}
+          onRemove={() => {
+            pending.current = undefined;
+            setQuote(undefined);
+            setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
+          }}
+        />
+      ))}
+      {quote !== undefined ? (
+        <>
+          <Text style={styles.total}>Total cotizado: {money(quote)}</Text>
+          <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
+        </>
+      ) : null}
+      {pending.current && !busy ? (
+        <Notice kind="warning">
+          La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
+          solicitud.
+        </Notice>
+      ) : null}
+      {items.length ? (
+        <Button
+          label="Vaciar carrito"
+          secondary
+          disabled={busy}
+          onPress={() => {
+            pending.current = undefined;
+            setQuote(undefined);
+            setItems([]);
+            setMessage(undefined);
+          }}
+        />
+      ) : null}
+      <Button
+        label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
+        disabled={busy || !enabled || items.length === 0}
+        onPress={() => void submit()}
+      />
+      <Button
+        label="Importar pedido de WhatsApp"
+        secondary
+        onPress={() => {
+          setCartOpen(false);
+          router.push('/(app)/orders/import');
+        }}
+      />
+    </ScrollView>
+  );
 
   return (
     <View style={shared.screen}>
       <View style={[shared.content, styles.posHeader]}>
         <SectionTitle title="Nueva venta" />
-        <Text style={shared.subtitle}>
-          Agrega productos al carrito, personaliza cada uno y confirma la venta. El servidor valida
-          el precio y el inventario.
-        </Text>
+        {tablet ? (
+          <Text style={shared.subtitle}>
+            Elige productos por categoría y personaliza cada uno. El servidor valida el precio y el
+            inventario.
+          </Text>
+        ) : null}
         {capabilities.error ? (
           <Notice kind="warning">
             La API conectada no publica las capacidades del POS. Puedes preparar el pedido, pero el
@@ -1207,6 +1366,14 @@ export function OrderBuilder() {
           </Notice>
         ) : !enabled ? (
           <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
+        ) : null}
+        {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
+        {categoryId === 'extras' ? (
+          <Notice>
+            {modifierTarget
+              ? `Los extras se aplican al último producto agregado: ${modifierTarget.item.productName}.`
+              : 'Agrega primero una hamburguesa, hot dog o complemento para asignarle extras.'}
+          </Notice>
         ) : null}
         <Field label="Buscar producto" value={search} onChangeText={setSearch} />
         <ScrollView
@@ -1227,20 +1394,36 @@ export function OrderBuilder() {
       </View>
       <View style={[styles.posContent, tablet && styles.posContentTablet]}>
         <ScrollView
-          style={styles.catalogPane}
+          style={[styles.catalogPane, !tablet && styles.catalogPanePhone]}
           contentContainerStyle={styles.productGrid}
           keyboardShouldPersistTaps="handled"
         >
           {categoryId === 'extras' ? (
-            catalog.data.modifiers
-              .filter((modifier) => modifier.available)
-              .map((modifier) => (
+            !modifierTarget ? (
+              <Text style={shared.subtitle}>Agrega un producto antes de elegir extras.</Text>
+            ) : !enabled ? (
+              <Text style={shared.subtitle}>El servidor aún no habilita las ventas del POS.</Text>
+            ) : modifierRecipe.isLoading ? (
+              <Text style={shared.subtitle}>Validando los extras de la receta…</Text>
+            ) : modifierRecipe.isError ? (
+              <Notice kind="error">No se pudo validar la receta activa del producto.</Notice>
+            ) : !modifierVersion ? (
+              <Text style={shared.subtitle}>
+                Configura primero la receta activa de este producto.
+              </Text>
+            ) : extras.length ? (
+              extras.map((modifier) => (
                 <Card key={modifier.id} style={styles.productCard}>
                   <Text style={shared.text}>{modifier.name}</Text>
                   <Text style={shared.subtitle}>{money(modifier.priceCents)}</Text>
                   <Button label="Agregar extra" onPress={() => addModifier(modifier.id)} />
                 </Card>
               ))
+            ) : (
+              <Text style={shared.subtitle}>
+                Esta receta no tiene extras con porción de inventario configurada.
+              </Text>
+            )
           ) : products.length ? (
             products.map((product) => (
               <Card key={product.id} style={styles.productCard}>
@@ -1253,66 +1436,45 @@ export function OrderBuilder() {
             <Text style={shared.subtitle}>No hay productos disponibles en esta categoría.</Text>
           )}
         </ScrollView>
-        <ScrollView
-          style={[styles.cartPane, tablet && styles.cartPaneTablet]}
-          contentContainerStyle={styles.cartContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Text style={shared.text}>Venta actual · {itemCount} artículo(s)</Text>
-          {!items.length ? (
-            <Text style={shared.subtitle}>Agrega productos desde el catálogo.</Text>
-          ) : null}
-          {items.map((item, index) => (
-            <DraftItemEditor
-              key={`${item.productId}-${index}`}
-              item={item}
-              catalog={catalog.data!}
-              onChange={(next) => updateItem(index, next)}
-              onRemove={() => {
-                pending.current = undefined;
-                setQuote(undefined);
-                setItems((current) => current.filter((_, itemIndex) => itemIndex !== index));
-              }}
-            />
-          ))}
-          {quote !== undefined ? (
-            <>
-              <Text style={styles.total}>Total cotizado: {money(quote)}</Text>
-              <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
-            </>
-          ) : null}
-          {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
-          {pending.current && !busy ? (
-            <Notice kind="warning">
-              La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
-              solicitud.
-            </Notice>
-          ) : null}
-          {items.length ? (
-            <Button
-              label="Vaciar carrito"
-              secondary
-              disabled={busy}
-              onPress={() => {
-                pending.current = undefined;
-                setQuote(undefined);
-                setItems([]);
-                setMessage(undefined);
-              }}
-            />
-          ) : null}
-          <Button
-            label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
-            disabled={busy || !enabled || items.length === 0}
-            onPress={() => void submit()}
-          />
-          <Button
-            label="Importar pedido de WhatsApp"
-            secondary
-            onPress={() => router.push('/(app)/orders/import')}
-          />
-        </ScrollView>
+        {tablet ? cartContents(true) : null}
       </View>
+      {!tablet ? (
+        <View style={styles.mobileCartBar}>
+          <View style={styles.mobileCartSummary}>
+            <Text style={shared.text}>{itemCount} artículo(s)</Text>
+            <Text style={shared.subtitle}>
+              {quote === undefined ? 'El total se confirma al cotizar' : `Total ${money(quote)}`}
+            </Text>
+          </View>
+          <Button label="Ver venta" disabled={!items.length} onPress={() => setCartOpen(true)} />
+        </View>
+      ) : null}
+      <Modal
+        visible={!tablet && cartOpen}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => setCartOpen(false)}
+      >
+        <View style={styles.cartModal}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cerrar venta"
+            style={styles.cartBackdrop}
+            onPress={() => setCartOpen(false)}
+          />
+          <View style={styles.cartSheet}>
+            <View style={styles.cartSheetHeader}>
+              <View>
+                <Text style={shared.text}>Tu venta</Text>
+                <Text style={shared.subtitle}>{itemCount} artículo(s)</Text>
+              </View>
+              <Button label="Seguir comprando" secondary onPress={() => setCartOpen(false)} />
+            </View>
+            {cartContents()}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1348,7 +1510,42 @@ const styles = StyleSheet.create({
   posContent: { flex: 1, minHeight: 0 },
   posContentTablet: { flexDirection: 'row', gap: 14, paddingHorizontal: 20, paddingBottom: 16 },
   catalogPane: { flex: 1, minHeight: 0 },
-  cartPane: { flex: 1, minHeight: 180, borderTopWidth: 1, borderColor: colors.border },
+  catalogPanePhone: { flex: 1 },
+  cartPane: { flex: 1, minHeight: 0, borderTopWidth: 1, borderColor: colors.border },
   cartPaneTablet: { flex: 0.9, borderTopWidth: 0, borderLeftWidth: 1 },
   cartContent: { padding: 16, gap: 12, paddingBottom: 30 },
+  mobileCartBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.panel,
+  },
+  mobileCartSummary: { flex: 1, gap: 2 },
+  cartModal: { flex: 1, justifyContent: 'flex-end' },
+  cartBackdrop: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: '#0009',
+  },
+  cartSheet: {
+    height: '88%',
+    backgroundColor: colors.ink,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    overflow: 'hidden',
+  },
+  cartSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: colors.border,
+  },
 });

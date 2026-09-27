@@ -69,6 +69,8 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0019_menu_catalog_corrections.sql',
       '0020_mobile_pos_operability.sql',
       '0021_inventory_catalog_and_negative_balances.sql',
+      '0022_exact_catalog_recipes.sql',
+      '0023_recipe_modifier_inventory.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     const [mobileDefaults] = await database.sql<{ ingredients: number; cash_enabled: boolean }[]>`
