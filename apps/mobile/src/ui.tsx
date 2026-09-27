@@ -1,4 +1,5 @@
 import type { PropsWithChildren, ReactNode } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -100,16 +101,44 @@ export function Pill({
 export function Notice({
   children,
   kind = 'info',
-}: PropsWithChildren<{ kind?: 'info' | 'error' | 'warning' }>) {
+  dismissible = false,
+  compact = false,
+}: PropsWithChildren<{
+  kind?: 'info' | 'error' | 'warning';
+  dismissible?: boolean;
+  compact?: boolean;
+}>) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
   return (
     <View
       style={[
         styles.notice,
+        dismissible && styles.noticeDismissible,
+        compact && styles.noticeCompact,
         kind === 'error' && styles.errorNotice,
         kind === 'warning' && styles.warningNotice,
       ]}
     >
-      <Text style={kind === 'error' ? shared.error : shared.subtitle}>{children}</Text>
+      <Text
+        style={[
+          kind === 'error' ? shared.error : shared.subtitle,
+          dismissible && styles.noticeMessage,
+        ]}
+      >
+        {children}
+      </Text>
+      {dismissible ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Cerrar aviso"
+          hitSlop={8}
+          onPress={() => setDismissed(true)}
+          style={styles.noticeClose}
+        >
+          <Text style={styles.noticeCloseText}>×</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -146,12 +175,18 @@ const styles = StyleSheet.create({
   pillText: { color: colors.text, fontWeight: '700' },
   pillTextSelected: { color: colors.ink },
   notice: {
+    alignItems: 'flex-start',
     padding: 12,
     borderRadius: 10,
     backgroundColor: '#17221a',
     borderColor: colors.border,
     borderWidth: 1,
   },
+  noticeDismissible: { flexDirection: 'row', gap: 8 },
+  noticeCompact: { padding: 8 },
+  noticeMessage: { flex: 1 },
+  noticeClose: { minWidth: 28, minHeight: 28, alignItems: 'center', justifyContent: 'center' },
+  noticeCloseText: { color: colors.muted, fontSize: 22, lineHeight: 24, fontWeight: '700' },
   errorNotice: { backgroundColor: '#34171d', borderColor: colors.red },
   warningNotice: { backgroundColor: '#392d13', borderColor: colors.gold },
   loading: { flex: 1, minHeight: 180, alignItems: 'center', justifyContent: 'center', gap: 12 },

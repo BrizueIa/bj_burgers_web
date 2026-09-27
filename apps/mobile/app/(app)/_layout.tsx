@@ -1,6 +1,5 @@
 import { Redirect, Slot, router, usePathname } from 'expo-router';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Loading, Screen } from '@/src/ui';
 import { colors, shared } from '@/src/theme';
 import { useOnline } from '@/src/hooks';
@@ -43,7 +42,7 @@ export default function AppLayout() {
     </View>
   );
   return (
-    <SafeAreaView style={shared.screen} edges={['top', 'bottom']}>
+    <View style={shared.screen}>
       <View style={styles.offline}>
         {!online ? (
           <Text style={styles.offlineText}>
@@ -67,7 +66,7 @@ export default function AppLayout() {
           {menu}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 const styles = StyleSheet.create({
