@@ -862,6 +862,16 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       expectedCents: 1500,
       differenceCents: -50,
     });
+    const report = await cashSessionState(sql);
+    expect(report.session).toBeNull();
+    expect(report.lastClosedSession).toMatchObject({
+      id: opened.result.session!.id,
+      expectedCents: 1500,
+      countedCents: 1450,
+      differenceCents: -50,
+      status: 'closed',
+    });
+    expect(report.recentClosings).toEqual([report.lastClosedSession]);
   });
 
   it('cobra pagos mixtos, calcula cambio y descuenta el reembolso de caja', async () => {

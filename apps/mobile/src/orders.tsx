@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -6,6 +6,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import {
   Modal,
+  PanResponder,
   Pressable,
   Share,
   ScrollView,
@@ -14,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type {
   Catalog,
@@ -24,7 +26,7 @@ import type {
   UnifiedOrderConfirm,
 } from '@bj/contracts';
 import { api } from './api';
-import { menuCategories } from './pos-catalog';
+import { categoryAfterSwipe, menuCategories } from './pos-catalog';
 import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
@@ -1322,7 +1324,32 @@ export function OrderBuilder() {
   const [busy, setBusy] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const tablet = width >= 760;
+  const categories = menuCategories(catalog.data ?? { categories: [] });
+  const categorySwipe = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) >= 28 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.35,
+        onPanResponderRelease: (_event, gesture) => {
+          const nextCategoryId = categoryAfterSwipe(categories, categoryId, gesture.dx, gesture.dy);
+          if (nextCategoryId) setCategoryId(nextCategoryId);
+        },
+      }),
+    [categories, categoryId],
+  );
+  const sheetDrag = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          gesture.dy >= 10 && gesture.dy > Math.abs(gesture.dx) * 1.1,
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dy >= 76 && gesture.dy > Math.abs(gesture.dx)) setCartOpen(false);
+        },
+      }),
+    [],
+  );
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
   const formLocked = busy || submissionUncertain;
   const enabled =
@@ -1507,7 +1534,6 @@ export function OrderBuilder() {
       </ScrollScreen>
     );
 
-  const categories = menuCategories(catalog.data);
   const searchTerm = search.trim().toLocaleLowerCase('es-MX');
   const products = catalog.data.products.filter(
     (product) =>
@@ -1645,6 +1671,7 @@ export function OrderBuilder() {
       </View>
       <View style={[styles.posContent, tablet && styles.posContentTablet]}>
         <ScrollView
+          {...categorySwipe.panHandlers}
           style={styles.catalogPane}
           contentContainerStyle={[styles.productGrid, styles.catalogGridContent]}
           keyboardShouldPersistTaps="handled"
@@ -1697,15 +1724,22 @@ export function OrderBuilder() {
         {tablet ? cartContents(true) : null}
       </View>
       {!tablet ? (
-        <View style={styles.mobileCartBar}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Ver venta, ${itemCount} artículos${quote === undefined ? '' : `, total ${money(quote)}`}`}
+          accessibilityState={{ disabled: !items.length }}
+          disabled={!items.length}
+          onPress={() => setCartOpen(true)}
+          style={({ pressed }) => [styles.mobileCartBar, pressed && styles.mobileCartBarPressed]}
+        >
           <View style={styles.mobileCartSummary}>
-            <Text style={shared.text}>{itemCount} artículo(s)</Text>
+            <Text style={shared.text}>Ver venta · {itemCount} artículo(s)</Text>
             <Text style={shared.subtitle}>
-              {quote === undefined ? 'El total se confirma al cotizar' : `Total ${money(quote)}`}
+              {quote === undefined ? 'Toca aquí para revisar el carrito' : `Total ${money(quote)}`}
             </Text>
           </View>
-          <Button label="Ver venta" disabled={!items.length} onPress={() => setCartOpen(true)} />
-        </View>
+          <Text style={styles.cartOpenIcon}>›</Text>
+        </Pressable>
       ) : null}
       <Modal
         visible={!tablet && cartOpen}
@@ -1721,7 +1755,10 @@ export function OrderBuilder() {
             style={styles.cartBackdrop}
             onPress={() => setCartOpen(false)}
           />
-          <View style={styles.cartSheet}>
+          <View style={[styles.cartSheet, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+            <View {...sheetDrag.panHandlers} style={styles.sheetHandleArea}>
+              <View style={styles.sheetHandle} />
+            </View>
             <View style={styles.cartSheetHeader}>
               <View>
                 <Text style={shared.text}>Tu venta</Text>
@@ -1815,8 +1852,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.panel,
+    minHeight: 72,
   },
+  mobileCartBarPressed: { backgroundColor: colors.panelRaised },
   mobileCartSummary: { flex: 1, gap: 2 },
+  cartOpenIcon: { color: colors.gold, fontSize: 32, fontWeight: '700', paddingRight: 8 },
   cartModal: { flex: 1, justifyContent: 'flex-end' },
   cartBackdrop: {
     ...StyleSheet.absoluteFill,
@@ -1829,6 +1869,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
     overflow: 'hidden',
   },
+  sheetHandleArea: { height: 28, alignItems: 'center', justifyContent: 'center' },
+  sheetHandle: { width: 44, height: 5, borderRadius: 999, backgroundColor: colors.muted },
   cartSheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',

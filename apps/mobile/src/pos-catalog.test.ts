@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { menuCategories } from './pos-catalog';
+import { categoryAfterSwipe, menuCategories } from './pos-catalog';
 
 describe('menuCategories', () => {
   it('shows the requested selling categories in order and renames drinks', () => {
@@ -27,5 +27,21 @@ describe('menuCategories', () => {
     });
 
     expect(categories.map(({ id }) => id)).toEqual(['extras']);
+  });
+});
+
+describe('swipe horizontal del catálogo', () => {
+  const categories = ['burgers', 'dogs', 'sides', 'extras', 'drinks'].map((id) => ({ id }));
+
+  it('avanza y retrocede una categoría según la dirección del gesto', () => {
+    expect(categoryAfterSwipe(categories, 'burgers', -110, 8)).toBe('dogs');
+    expect(categoryAfterSwipe(categories, 'drinks', 110, 8)).toBe('extras');
+  });
+
+  it('ignora desplazamientos verticales, cortos y los límites del catálogo', () => {
+    expect(categoryAfterSwipe(categories, 'burgers', 10, 110)).toBeUndefined();
+    expect(categoryAfterSwipe(categories, 'burgers', 32, 0)).toBeUndefined();
+    expect(categoryAfterSwipe(categories, 'burgers', 110, 0)).toBeUndefined();
+    expect(categoryAfterSwipe(categories, 'drinks', -110, 0)).toBeUndefined();
   });
 });

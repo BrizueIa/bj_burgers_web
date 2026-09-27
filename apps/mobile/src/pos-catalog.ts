@@ -13,3 +13,16 @@ export function menuCategories(catalog: { categories: CatalogCategory[] }) {
       .map((category) => ({ ...category, name: 'Refrescos' })),
   ];
 }
+
+export function categoryAfterSwipe(
+  categories: ReadonlyArray<{ id: string }>,
+  currentId: string,
+  distanceX: number,
+  distanceY: number,
+) {
+  if (Math.abs(distanceX) < 72 || Math.abs(distanceX) < Math.abs(distanceY) * 1.35)
+    return undefined;
+  const currentIndex = categories.findIndex((category) => category.id === currentId);
+  if (currentIndex < 0) return undefined;
+  return categories[currentIndex + (distanceX < 0 ? 1 : -1)]?.id;
+}

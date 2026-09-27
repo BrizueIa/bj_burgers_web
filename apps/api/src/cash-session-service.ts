@@ -13,34 +13,51 @@ const ids = (actor: AuthenticatedActor) =>
     ? { device: actor.deviceId, user: null }
     : { device: null, user: actor.userId };
 async function state(sql: Sql) {
-  const rows = await sql<
-    {
-      id: string;
-      status: 'open' | 'closed';
-      opening_fund_cents: number;
-      expected_cents: number;
-      counted_cents: number | null;
-      difference_cents: number | null;
-      opened_at: Date | string;
-      closed_at: Date | string | null;
-    }[]
-  >`select * from cash_sessions where status='open' limit 1`;
+  type SessionRow = {
+    id: string;
+    status: 'open' | 'closed';
+    opening_fund_cents: number;
+    expected_cents: number;
+    counted_cents: number | null;
+    difference_cents: number | null;
+    opened_at: Date | string;
+    closed_at: Date | string | null;
+  };
+  const [rows, closedRows] = await Promise.all([
+    sql<SessionRow[]>`select * from cash_sessions where status='open' limit 1`,
+    sql<
+      SessionRow[]
+    >`select * from cash_sessions where status='closed' order by closed_at desc limit 10`,
+  ]);
   const session = rows[0];
-  if (!session) return { session: null, movements: [] };
-  const movements = await sql<
-    { id: string; kind: string; amount_cents: number; reason: string; created_at: Date | string }[]
-  >`select id,kind,amount_cents,reason,created_at from cash_movements where cash_session_id=${session.id} order by created_at,id`;
+  const movements = session
+    ? await sql<
+        {
+          id: string;
+          kind: string;
+          amount_cents: number;
+          reason: string;
+          created_at: Date | string;
+        }[]
+      >`select id,kind,amount_cents,reason,created_at from cash_movements where cash_session_id=${session.id} order by created_at,id`
+    : [];
+  const serializeSession = (row: SessionRow | undefined) =>
+    row
+      ? {
+          id: row.id,
+          status: row.status,
+          openingFundCents: row.opening_fund_cents,
+          expectedCents: row.expected_cents,
+          countedCents: row.counted_cents,
+          differenceCents: row.difference_cents,
+          openedAt: new Date(row.opened_at).toISOString(),
+          closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : null,
+        }
+      : null;
   return {
-    session: {
-      id: session.id,
-      status: session.status,
-      openingFundCents: session.opening_fund_cents,
-      expectedCents: session.expected_cents,
-      countedCents: session.counted_cents,
-      differenceCents: session.difference_cents,
-      openedAt: new Date(session.opened_at).toISOString(),
-      closedAt: session.closed_at ? new Date(session.closed_at).toISOString() : null,
-    },
+    session: serializeSession(session),
+    lastClosedSession: serializeSession(closedRows[0]),
+    recentClosings: closedRows.map((row) => serializeSession(row)!),
     movements: movements.map((m) => ({
       id: m.id,
       kind: m.kind,

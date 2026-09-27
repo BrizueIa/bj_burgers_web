@@ -241,10 +241,10 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               registros anteriores.
             </Notice>
           ) : null}
-          <Notice>
+          <Notice dismissible compact>
             {unifiedOrdersEnabled
-              ? 'Las ventas nuevas se cotizan y reservan como comandas únicas. El cobro se integra desde Caja.'
-              : 'Empieza con ingredientes, compras y recetas. El POS unificado permanece deshabilitado hasta conciliar existencias.'}
+              ? 'El POS cotiza y reserva; cobra desde Caja.'
+              : 'Empieza con ingredientes, compras y recetas. El POS requiere habilitación del servidor.'}
           </Notice>
         </>
       ) : null}
@@ -275,11 +275,9 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       ) : null}
       {section === 'inventory' ? (
         <>
-          <Notice>
-            El catálogo de ingredientes inicia con existencia cero. Ventas y mermas pueden dejar
-            saldos negativos mientras capturas el inventario real; registra un conteo para
-            regularizarlo. Las operaciones sin costo conocido se marcan como pendientes y no inflan
-            la utilidad.
+          <Notice dismissible compact>
+            Existencias iniciales en 0; ventas y mermas admiten negativos. Registra un conteo para
+            regularizar el inventario.
           </Notice>
           <View style={styles.actions}>
             <Button label="Ingrediente" onPress={() => openEditor('ingredient')} />
