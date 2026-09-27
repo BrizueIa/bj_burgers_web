@@ -1,7 +1,8 @@
 param(
   [ValidateSet('debug', 'release')]
   [string]$Variant = 'release',
-  [string]$Architectures = 'arm64-v8a'
+  [string]$Architectures = 'arm64-v8a',
+  [string]$GradleInitScript
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,11 +33,18 @@ if ($Variant -eq 'release') {
   ) | Set-Content -LiteralPath $propertiesPath
 }
 try {
+  $gradleArguments = @()
+  if ($GradleInitScript) {
+    if (-not (Test-Path -LiteralPath $GradleInitScript)) {
+      throw "No existe el script de inicialización Gradle: $GradleInitScript."
+    }
+    $gradleArguments += @('--init-script', (Resolve-Path -LiteralPath $GradleInitScript).Path)
+  }
   if ($Variant -eq 'release') {
-    & .\android\gradlew.bat -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleRelease
+    & .\android\gradlew.bat @gradleArguments -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleRelease
     $apkPath = 'android\app\build\outputs\apk\release\app-release.apk'
   } else {
-    & .\android\gradlew.bat -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleDebug
+    & .\android\gradlew.bat @gradleArguments -p android --no-parallel "-PreactNativeArchitectures=$Architectures" :app:assembleDebug
     $apkPath = 'android\app\build\outputs\apk\debug\app-debug.apk'
   }
   if ($LASTEXITCODE -ne 0) { throw "Gradle no pudo generar el APK $Variant." }

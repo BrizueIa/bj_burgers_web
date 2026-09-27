@@ -29,17 +29,17 @@ describe('catálogo de venta POS', () => {
     ).not.toContain('Salchicha premium');
   });
 
-  it('conserva tamaños y precios actuales de complementos y bebidas', () => {
+  it('conserva precios de complementos y vende los aros por pieza', () => {
     const product = (id: string) => seedCatalog.products.find((candidate) => candidate.id === id);
     expect(product('papas-250')).toMatchObject({ priceCents: 4900, ingredients: ['Papas'] });
     expect(product('aros-200')).toMatchObject({
+      name: 'Aro de cebolla',
       priceCents: 5900,
       ingredients: ['Aros de cebolla'],
     });
     expect(product('aros-100')).toMatchObject({
-      name: 'Porción de aros de cebolla',
-      priceCents: 2600,
-      ingredients: ['Aros de cebolla'],
+      name: 'Porción de aros de cebolla (descontinuada)',
+      available: false,
     });
     expect(product('jalapeno-cremoso')?.ingredients).toEqual(['Jalapeño', 'Queso Philadelphia']);
     expect(product('coca-cola')?.priceCents).toBe(3900);

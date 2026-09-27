@@ -29,7 +29,7 @@ export const stockReservationResolveRequestSchema = z.object({
 export const stockCountRequestSchema = z.object({
   idempotencyKey: z.uuid(),
   ingredientId: z.uuid(),
-  countedQuantity: z.string().regex(/^\d{1,13}(?:\.\d{1,3})?$/),
+  countedQuantity: z.string().regex(/^-?\d{1,13}(?:\.\d{1,3})?$/),
   unitCostCents: stockUnitCostSchema.optional(),
   reason: stockReasonSchema,
 });

@@ -343,6 +343,7 @@ type RecipeVersions = {
     quantity: string;
     removable: boolean;
     extra: boolean;
+    ingredient_id?: string | null;
   }>;
 };
 
@@ -368,12 +369,15 @@ function RecipeVersionsView({
     'ingredient',
   );
   const [componentId, setComponentId] = useState('');
+  const [modifierIngredientId, setModifierIngredientId] = useState('');
   const [componentQuantity, setComponentQuantity] = useState('');
   const [components, setComponents] = useState<
     Array<{
       kind: 'ingredient' | 'product' | 'packaging' | 'modifier';
       id: string;
       name: string;
+      ingredientId?: string;
+      inventoryName?: string;
       quantity: string;
       removable: boolean;
       extra: boolean;
@@ -397,18 +401,31 @@ function RecipeVersionsView({
       setError('Selecciona un componente y una cantidad de hasta tres decimales.');
       return;
     }
+    const inventoryIngredient =
+      kind === 'modifier'
+        ? ingredients.find((item) => item.id === modifierIngredientId)
+        : undefined;
+    if (kind === 'modifier' && !inventoryIngredient) {
+      setError('Vincula el extra con el insumo físico que se descontará del inventario.');
+      return;
+    }
     setComponents((current) => [
       ...current,
       {
         kind,
         id: selected.id,
-        name: selected.name,
+        name:
+          kind === 'modifier' ? `${selected.name} → ${inventoryIngredient!.name}` : selected.name,
+        ...(inventoryIngredient
+          ? { ingredientId: inventoryIngredient.id, inventoryName: inventoryIngredient.name }
+          : {}),
         quantity: componentQuantity,
         removable: false,
-        extra: false,
+        extra: kind === 'modifier',
       },
     ]);
     setComponentId('');
+    setModifierIngredientId('');
     setComponentQuantity('');
     setError('');
   };
@@ -434,7 +451,7 @@ function RecipeVersionsView({
             ...(component.kind === 'product'
               ? { productId: component.id }
               : component.kind === 'modifier'
-                ? { modifierId: component.id }
+                ? { modifierId: component.id, ingredientId: component.ingredientId }
                 : { ingredientId: component.id }),
           })),
         }),
@@ -508,6 +525,22 @@ function RecipeVersionsView({
               ))}
             </select>
           </label>
+          {kind === 'modifier' ? (
+            <label>
+              Insumo físico
+              <select
+                value={modifierIngredientId}
+                onChange={(event) => setModifierIngredientId(event.target.value)}
+              >
+                <option value="">Selecciona el insumo que se descontará…</option>
+                {ingredients.map((ingredient) => (
+                  <option value={ingredient.id} key={ingredient.id}>
+                    {ingredient.name} ({ingredient.unit})
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label>
             Cantidad
             <input
@@ -549,6 +582,7 @@ function RecipeVersionsView({
                         <input
                           type="checkbox"
                           checked={component.extra}
+                          disabled={component.kind === 'modifier'}
                           onChange={(event) =>
                             setComponents((current) =>
                               current.map((item, itemIndex) =>

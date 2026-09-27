@@ -9,6 +9,7 @@ import type {
 } from './types.js';
 
 export const COMBO_PRICE_CENTS = 4600;
+export const COMBO_POTATOES_GRAMS = 100;
 
 export function formatMoney(cents: number): string {
   return new Intl.NumberFormat('es-MX', {

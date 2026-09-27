@@ -173,6 +173,7 @@ export const businessEntrySchema = z.object({
   payment: z.enum(['', 'cash', 'card', 'transfer']),
   total_cents: z.number().int().nonnegative(),
   cost_cents: z.number().int().nonnegative(),
+  cost_pending: z.boolean().default(false),
   lines: z.array(z.record(z.string(), z.unknown())),
   created_at: z.string().datetime({ offset: true }),
 });
@@ -187,6 +188,9 @@ export const businessStateResponseSchema = z.object({
     sales_count: z.number().int().nonnegative(),
     revenue_cents: decimalSchema,
     cost_cents: decimalSchema,
+    uncosted_sales_count: z.number().int().nonnegative().default(0),
+    uncosted_sales_cents: decimalSchema.default('0'),
+    uncosted_waste_count: z.number().int().nonnegative().default(0),
     purchases_cents: decimalSchema,
     expenses_cents: decimalSchema,
     waste_cents: decimalSchema,
