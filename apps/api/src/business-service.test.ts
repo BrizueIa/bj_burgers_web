@@ -1650,10 +1650,13 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       from order_stock_reservations link
       join stock_reservations reservation on reservation.id=link.reservation_id
       where link.order_id=${created.order.id} order by reservation.ingredient_id`;
-    expect(reservations).toEqual([
-      { ingredient_id: ingredient, quantity: '150.000' },
-      { ingredient_id: tocinoIngredient, quantity: '30.000' },
-    ]);
+    expect(reservations).toHaveLength(2);
+    expect(reservations).toEqual(
+      expect.arrayContaining([
+        { ingredient_id: ingredient, quantity: '150.000' },
+        { ingredient_id: tocinoIngredient, quantity: '30.000' },
+      ]),
+    );
     expect((await state()).products[0]?.cost_cents).toBe(1500);
   });
 });
