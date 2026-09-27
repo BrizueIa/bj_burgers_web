@@ -1501,12 +1501,7 @@ export function OrderBuilder() {
           editable={!formLocked}
           onChangeText={setSearch}
         />
-        <ScrollView
-          horizontal
-          scrollEnabled={!formLocked}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.row}
-        >
+        <View style={styles.categoryFilters}>
           {categories.map((category) => (
             <Pill
               key={category.id}
@@ -1516,14 +1511,19 @@ export function OrderBuilder() {
               onPress={() => setCategoryId(category.id)}
             />
           ))}
-        </ScrollView>
+        </View>
         <Text style={shared.label}>
           {categories.find((category) => category.id === categoryId)?.name ?? 'Catálogo'} ·{' '}
           {categoryId === 'extras' ? extras.length : products.length} opciones
         </Text>
       </View>
       <View style={[styles.posContent, tablet && styles.posContentTablet]}>
-        <View style={[styles.catalogPane, styles.productGrid]}>
+        <ScrollView
+          style={styles.catalogPane}
+          contentContainerStyle={[styles.productGrid, styles.catalogGridContent]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
           {categoryId === 'extras' ? (
             !modifierTarget ? (
               <Text style={shared.subtitle}>Agrega un producto antes de elegir extras.</Text>
@@ -1567,7 +1567,7 @@ export function OrderBuilder() {
           ) : (
             <Text style={shared.subtitle}>No hay productos disponibles en esta categoría.</Text>
           )}
-        </View>
+        </ScrollView>
         {tablet ? cartContents(true) : null}
       </View>
       {!tablet ? (
@@ -1636,6 +1636,7 @@ const styles = StyleSheet.create({
   event: { paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  categoryFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   productGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1643,6 +1644,7 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 16,
   },
+  catalogGridContent: { flexGrow: 1, paddingBottom: 20 },
   productTile: {
     flexGrow: 1,
     flexBasis: 150,
