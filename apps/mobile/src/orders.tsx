@@ -24,6 +24,7 @@ import type {
   UnifiedOrderConfirm,
 } from '@bj/contracts';
 import { api } from './api';
+import { menuCategories } from './pos-catalog';
 import { centsFromInput, money, statusLabel } from './format';
 import { useForeground } from './hooks';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
@@ -925,8 +926,39 @@ export function OrderImport() {
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [quotedTotal, setQuotedTotal] = useState<number | undefined>();
+  const [search, setSearch] = useState('');
+  const [categoryId, setCategoryId] = useState('burgers');
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
   const formLocked = busy || uncertain;
+  const modifierTarget = draft.items.reduce<{ item: DraftItem; index: number } | undefined>(
+    (target, item, index) => {
+      const product = catalog.data?.products.find((candidate) => candidate.id === item.productId);
+      return product?.categoryId !== 'drinks' ? { item, index } : target;
+    },
+    undefined,
+  );
+  const modifierRecipe = useQuery({
+    queryKey: ['recipe-versions', modifierTarget?.item.productId],
+    queryFn: () => api.recipeVersions(modifierTarget!.item.productId),
+    enabled: categoryId === 'extras' && Boolean(modifierTarget),
+  });
+  const modifierVersion = modifierRecipe.data?.versions.find(
+    (version) =>
+      version.product_id === modifierTarget?.item.productId && version.status === 'active',
+  );
+  const configuredModifiers = new Set(
+    modifierVersion
+      ? (modifierRecipe.data?.components
+          .filter(
+            (component) =>
+              component.recipe_version_id === modifierVersion.id &&
+              component.component_kind === 'modifier' &&
+              component.modifier_id &&
+              component.extra,
+          )
+          .map((component) => component.modifier_id!) ?? [])
+      : [],
+  );
   const changeDraft = (update: (current: OrderDraft) => OrderDraft) => {
     if (uncertain) return;
     pending.current = undefined;
@@ -964,6 +996,41 @@ export function OrderImport() {
         },
       ],
     }));
+  const addModifier = (modifierId: string) => {
+    if (!modifierTarget) {
+      setError('Agrega primero una hamburguesa, hot dog o complemento para asignar el extra.');
+      return;
+    }
+    if (!modifierVersion) {
+      setError(
+        `Configura una receta activa para ${modifierTarget.item.productName} antes de vender extras.`,
+      );
+      return;
+    }
+    if (!configuredModifiers.has(modifierId)) {
+      const modifier = catalog.data?.modifiers.find((candidate) => candidate.id === modifierId);
+      setError(
+        `${modifier?.name ?? 'Este extra'} no está configurado para ${modifierTarget.item.productName}.`,
+      );
+      return;
+    }
+    if (modifierTarget.item.modifierIds.includes(modifierId)) {
+      const modifier = catalog.data?.modifiers.find((candidate) => candidate.id === modifierId);
+      setError(
+        `${modifier?.name ?? 'El extra'} ya está agregado a ${modifierTarget.item.productName}.`,
+      );
+      return;
+    }
+    setError(undefined);
+    changeDraft((current) => ({
+      ...current,
+      items: current.items.map((item, index) =>
+        index === modifierTarget.index
+          ? { ...item, modifierIds: [...item.modifierIds, modifierId] }
+          : item,
+      ),
+    }));
+  };
   const updateItem = (index: number, next: DraftItem) =>
     changeDraft((current) => ({
       ...current,
@@ -1049,6 +1116,20 @@ export function OrderImport() {
         <Notice kind="error">No se pudo cargar el catálogo.</Notice>
       </ScrollScreen>
     );
+  const categories = menuCategories(catalog.data);
+  const searchTerm = search.trim().toLocaleLowerCase('es-MX');
+  const categoryProducts = catalog.data.products.filter(
+    (product) =>
+      product.available &&
+      product.categoryId === categoryId &&
+      product.name.toLocaleLowerCase('es-MX').includes(searchTerm),
+  );
+  const categoryModifiers = catalog.data.modifiers.filter(
+    (modifier) =>
+      modifier.available &&
+      modifier.name.toLocaleLowerCase('es-MX').includes(searchTerm) &&
+      configuredModifiers.has(modifier.id),
+  );
   return (
     <ScrollScreen>
       <SectionTitle title="Importar de WhatsApp" />
@@ -1075,19 +1156,72 @@ export function OrderImport() {
         La comanda importada se registra para mostrador. No requiere datos de cliente ni domicilio.
       </Notice>
       <Text style={shared.label}>Agregar producto</Text>
-      <ScrollView horizontal contentContainerStyle={styles.row}>
-        {catalog.data.products
-          .filter((product) => product.available)
-          .map((product) => (
-            <Pill
+      <Field
+        label="Buscar en el catálogo"
+        value={search}
+        editable={!formLocked}
+        onChangeText={setSearch}
+      />
+      <View style={styles.categoryFilters}>
+        {categories.map((category) => (
+          <Pill
+            key={category.id}
+            label={category.name}
+            selected={categoryId === category.id}
+            disabled={formLocked}
+            onPress={() => setCategoryId(category.id)}
+          />
+        ))}
+      </View>
+      <Text style={shared.label}>
+        {categories.find((category) => category.id === categoryId)?.name ?? 'Catálogo'} ·{' '}
+        {categoryId === 'extras' ? categoryModifiers.length : categoryProducts.length} opciones
+      </Text>
+      <View style={styles.productGrid}>
+        {categoryId === 'extras' ? (
+          !modifierTarget ? (
+            <Text style={shared.subtitle}>
+              Agrega primero una hamburguesa, hot dog o complemento.
+            </Text>
+          ) : modifierRecipe.isLoading ? (
+            <Text style={shared.subtitle}>
+              Validando extras de {modifierTarget.item.productName}…
+            </Text>
+          ) : modifierRecipe.isError ? (
+            <Notice kind="error">No se pudo validar la receta activa de este producto.</Notice>
+          ) : !modifierVersion ? (
+            <Text style={shared.subtitle}>Configura una receta activa antes de vender extras.</Text>
+          ) : categoryModifiers.length ? (
+            categoryModifiers.map((modifier) => (
+              <CatalogTile
+                key={modifier.id}
+                name={modifier.name}
+                priceCents={modifier.priceCents}
+                actionLabel="Extra"
+                disabled={formLocked}
+                onPress={() => addModifier(modifier.id)}
+              />
+            ))
+          ) : (
+            <Text style={shared.subtitle}>
+              No hay extras configurados para el producto seleccionado.
+            </Text>
+          )
+        ) : categoryProducts.length ? (
+          categoryProducts.map((product) => (
+            <CatalogTile
               key={product.id}
-              label={`${product.name} ${money(product.priceCents)}`}
-              selected={false}
+              name={product.name}
+              priceCents={product.priceCents}
+              actionLabel="Agregar"
               disabled={formLocked}
               onPress={() => addProduct(product)}
             />
-          ))}
-      </ScrollView>
+          ))
+        ) : (
+          <Text style={shared.subtitle}>No hay productos disponibles en esta categoría.</Text>
+        )}
+      </View>
       {draft.items.map((item, index) => (
         <DraftItemEditor
           key={`${item.productId}-${index}`}
@@ -1373,15 +1507,7 @@ export function OrderBuilder() {
       </ScrollScreen>
     );
 
-  const categories = [
-    ...catalog.data.categories
-      .filter((category) => category.id !== 'drinks')
-      .sort((a, b) => a.order - b.order),
-    { id: 'extras', name: 'Extras', order: 4 },
-    ...catalog.data.categories
-      .filter((category) => category.id === 'drinks')
-      .map((category) => ({ ...category, name: 'Refrescos' })),
-  ];
+  const categories = menuCategories(catalog.data);
   const searchTerm = search.trim().toLocaleLowerCase('es-MX');
   const products = catalog.data.products.filter(
     (product) =>
