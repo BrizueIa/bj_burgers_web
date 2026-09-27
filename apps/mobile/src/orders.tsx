@@ -141,11 +141,22 @@ function OrdersList({
   orders,
   selectedId,
   onSelect,
+  loadError = false,
+  onRetry,
 }: {
   orders: Order[];
   selectedId?: string;
   onSelect(order: Order): void;
+  loadError?: boolean;
+  onRetry?: () => void;
 }) {
+  if (!orders.length && loadError)
+    return (
+      <View style={styles.empty}>
+        <Notice kind="error">No se pudo confirmar si hay comandas en este estado.</Notice>
+        {onRetry ? <Button label="Reintentar" onPress={onRetry} /> : null}
+      </View>
+    );
   if (!orders.length)
     return (
       <View style={styles.empty}>
@@ -173,7 +184,8 @@ function OrdersList({
 
 export function OrdersBoard() {
   const [filter, setFilter] = useState<OrderStatus | 'all'>('all');
-  const { data: orders = [], isLoading, error, refetch, isFetching } = useOrders(filter);
+  const { data: loadedOrders, isLoading, error, refetch, isFetching } = useOrders(filter);
+  const orders = loadedOrders ?? [];
   const [selectedId, setSelectedId] = useState<string>();
   const { width } = useWindowDimensions();
   const tablet = width >= 760;
@@ -223,6 +235,8 @@ export function OrdersBoard() {
               <OrdersList
                 orders={orders}
                 selectedId={selectedId}
+                loadError={Boolean(error && !loadedOrders)}
+                onRetry={() => void refetch()}
                 onSelect={(order) => setSelectedId(order.id)}
               />
             </View>
@@ -239,6 +253,8 @@ export function OrdersBoard() {
         ) : (
           <OrdersList
             orders={orders}
+            loadError={Boolean(error && !loadedOrders)}
+            onRetry={() => void refetch()}
             onSelect={(order) =>
               router.push({ pathname: '/(app)/orders/[id]', params: { id: order.id } })
             }
@@ -756,11 +772,13 @@ function DraftItemEditor({
   catalog,
   onChange,
   onRemove,
+  disabled = false,
 }: {
   item: DraftItem;
   catalog: Catalog;
   onChange(next: DraftItem): void;
   onRemove(): void;
+  disabled?: boolean;
 }) {
   const product = catalog.products.find((candidate) => candidate.id === item.productId);
   const recipe = useQuery({
@@ -792,15 +810,17 @@ function DraftItemEditor({
         <Button
           label="−"
           secondary
+          disabled={disabled}
           onPress={() => onChange({ ...item, quantity: Math.max(1, item.quantity - 1) })}
         />
         <Text style={shared.text}>{item.quantity}</Text>
         <Button
           label="+"
           secondary
+          disabled={disabled}
           onPress={() => onChange({ ...item, quantity: item.quantity + 1 })}
         />
-        <Button label="Quitar" secondary onPress={onRemove} />
+        <Button label="Quitar" secondary disabled={disabled} onPress={onRemove} />
       </View>
       {product?.removableIngredients.length ? (
         <>
@@ -811,6 +831,7 @@ function DraftItemEditor({
                 key={ingredient}
                 label={ingredient}
                 selected={item.removedIngredients.includes(ingredient)}
+                disabled={disabled}
                 onPress={() =>
                   onChange({
                     ...item,
@@ -838,6 +859,7 @@ function DraftItemEditor({
                 key={modifier.id}
                 label={`${modifier.name} ${money(modifier.priceCents)}`}
                 selected={item.modifierIds.includes(modifier.id)}
+                disabled={disabled}
                 onPress={() =>
                   onChange({ ...item, modifierIds: toggle(item.modifierIds, modifier.id) })
                 }
@@ -853,6 +875,7 @@ function DraftItemEditor({
         <Pill
           label="Convertir en combo"
           selected={item.combo}
+          disabled={disabled}
           onPress={() => {
             if (item.combo) {
               const withoutDrink = { ...item };
@@ -873,13 +896,19 @@ function DraftItemEditor({
                   key={drink.id}
                   label={drink.name}
                   selected={item.drinkProductId === drink.id}
+                  disabled={disabled}
                   onPress={() => onChange({ ...item, drinkProductId: drink.id })}
                 />
               ))}
           </View>
         </>
       ) : null}
-      <Field label="Nota" value={item.note} onChangeText={(note) => onChange({ ...item, note })} />
+      <Field
+        label="Nota"
+        value={item.note}
+        editable={!disabled}
+        onChangeText={(note) => onChange({ ...item, note })}
+      />
     </Card>
   );
 }
@@ -894,22 +923,33 @@ export function OrderImport() {
   const [draft, setDraft] = useState<OrderDraft>(emptyDraft);
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
   const [quotedTotal, setQuotedTotal] = useState<number | undefined>();
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
-  useEffect(() => {
+  const formLocked = busy || uncertain;
+  const changeDraft = (update: (current: OrderDraft) => OrderDraft) => {
+    if (uncertain) return;
     pending.current = undefined;
     setQuotedTotal(undefined);
-  }, [draft]);
+    setDraft(update);
+  };
   const parse = async () => {
     setError(undefined);
+    const rawMessage = draft.rawMessage;
+    pending.current = undefined;
+    setQuotedTotal(undefined);
+    setBusy(true);
     try {
-      setDraft(await api.parseOrderDraft(draft.rawMessage));
+      const parsed = await api.parseOrderDraft(rawMessage);
+      changeDraft(() => ({ ...emptyDraft(), ...parsed }));
     } catch (cause) {
       setError(cause instanceof BjApiError ? cause.message : 'No se pudo interpretar el mensaje.');
+    } finally {
+      setBusy(false);
     }
   };
   const addProduct = (product: Catalog['products'][number]) =>
-    setDraft((current) => ({
+    changeDraft((current) => ({
       ...current,
       items: [
         ...current.items,
@@ -925,11 +965,12 @@ export function OrderImport() {
       ],
     }));
   const updateItem = (index: number, next: DraftItem) =>
-    setDraft((current) => ({
+    changeDraft((current) => ({
       ...current,
       items: current.items.map((item, itemIndex) => (itemIndex === index ? next : item)),
     }));
   const create = async () => {
+    const confirming = Boolean(pending.current);
     const unifiedOrdersEnabled =
       capabilities.data?.some(
         (capability) => capability.key === 'unified_orders' && capability.enabled,
@@ -985,7 +1026,13 @@ export function OrderImport() {
       await queryClient.invalidateQueries({ queryKey: ['orders'] });
       router.replace({ pathname: '/(app)/orders/[id]', params: { id: order.id } });
     } catch (cause) {
-      if (cause instanceof BjApiError && !cause.ambiguous) pending.current = undefined;
+      const ambiguous = !(cause instanceof BjApiError) || cause.ambiguous;
+      if (confirming && ambiguous) setUncertain(true);
+      else if (!ambiguous) {
+        pending.current = undefined;
+        setQuotedTotal(undefined);
+        setUncertain(false);
+      }
       setError(
         cause instanceof BjApiError
           ? cause.message
@@ -1011,16 +1058,14 @@ export function OrderImport() {
       <Field
         label="Mensaje de WhatsApp"
         value={draft.rawMessage}
-        onChangeText={(rawMessage) => {
-          pending.current = undefined;
-          setDraft((current) => ({ ...current, rawMessage }));
-        }}
+        editable={!formLocked}
+        onChangeText={(rawMessage) => changeDraft((current) => ({ ...current, rawMessage }))}
         multiline
       />
       <Button
         label="Interpretar mensaje"
         secondary
-        disabled={busy || draft.rawMessage.trim().length < 3}
+        disabled={formLocked || draft.rawMessage.trim().length < 3}
         onPress={() => void parse()}
       />
       {draft.unresolvedLines.length ? (
@@ -1038,6 +1083,7 @@ export function OrderImport() {
               key={product.id}
               label={`${product.name} ${money(product.priceCents)}`}
               selected={false}
+              disabled={formLocked}
               onPress={() => addProduct(product)}
             />
           ))}
@@ -1048,8 +1094,9 @@ export function OrderImport() {
           item={item}
           catalog={catalog.data}
           onChange={(next) => updateItem(index, next)}
+          disabled={formLocked}
           onRemove={() =>
-            setDraft((current) => ({
+            changeDraft((current) => ({
               ...current,
               items: current.items.filter((_, itemIndex) => itemIndex !== index),
             }))
@@ -1063,11 +1110,24 @@ export function OrderImport() {
           <Notice kind="warning">Revisa el total y confirma la comanda.</Notice>
         </>
       ) : null}
-      {pending.current && !busy ? (
-        <Notice kind="warning">La respuesta no se confirmó. Reintenta esta misma comanda.</Notice>
+      {uncertain ? (
+        <Notice kind="warning">
+          La respuesta pudo perderse después de guardar. Reintenta esta misma comanda; el carrito
+          quedó bloqueado para evitar duplicarla.
+        </Notice>
+      ) : pending.current && !busy ? (
+        <Notice kind="warning">Revisa la cotización y confirma esta misma comanda.</Notice>
       ) : null}
       <Button
-        label={busy ? 'Procesando…' : pending.current ? 'Confirmar comanda' : 'Cotizar comanda'}
+        label={
+          busy
+            ? 'Procesando…'
+            : uncertain
+              ? 'Reintentar la misma comanda'
+              : pending.current
+                ? 'Confirmar comanda'
+                : 'Cotizar comanda'
+        }
         disabled={busy || draft.items.length === 0}
         onPress={() => void create()}
       />
@@ -1080,19 +1140,27 @@ function CatalogTile({
   priceCents,
   actionLabel,
   onPress,
+  disabled = false,
 }: {
   name: string;
   priceCents: number;
   actionLabel: string;
   onPress(): void;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${actionLabel}: ${name}, ${money(priceCents)}`}
       accessibilityHint="Agrega este artículo a la venta actual"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.productTile, pressed && styles.productTilePressed]}
+      style={({ pressed }) => [
+        styles.productTile,
+        pressed && !disabled && styles.productTilePressed,
+        disabled && styles.productTileDisabled,
+      ]}
     >
       <Text numberOfLines={2} style={styles.productTileName}>
         {name}
@@ -1118,9 +1186,11 @@ export function OrderBuilder() {
   const [categoryId, setCategoryId] = useState('burgers');
   const [cartOpen, setCartOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [submissionUncertain, setSubmissionUncertain] = useState(false);
   const { width } = useWindowDimensions();
   const tablet = width >= 760;
   const pending = useRef<UnifiedOrderConfirm | undefined>(undefined);
+  const formLocked = busy || submissionUncertain;
   const enabled =
     capabilities.data?.some(
       (capability) => capability.key === 'unified_orders' && capability.enabled,
@@ -1156,11 +1226,13 @@ export function OrderBuilder() {
   );
 
   const updateItem = (index: number, next: DraftItem) => {
+    if (formLocked) return;
     pending.current = undefined;
     setQuote(undefined);
     setItems((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)));
   };
   const addProduct = (product: Catalog['products'][number]) => {
+    if (formLocked) return;
     pending.current = undefined;
     setQuote(undefined);
     setMessage(undefined);
@@ -1178,6 +1250,7 @@ export function OrderBuilder() {
     ]);
   };
   const addModifier = (modifierId: string) => {
+    if (formLocked) return;
     if (!modifierTarget) {
       setMessage('Agrega primero una hamburguesa, hot dog o complemento para asignar el extra.');
       return;
@@ -1246,6 +1319,7 @@ export function OrderBuilder() {
       setMessage('Selecciona una bebida para cada combo.');
       return;
     }
+    const confirming = Boolean(pending.current);
     setBusy(true);
     setMessage(undefined);
     try {
@@ -1261,13 +1335,20 @@ export function OrderBuilder() {
         return;
       }
       const order = await api.confirmUnifiedOrder(pending.current);
+      setSubmissionUncertain(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['orders'] }),
         queryClient.invalidateQueries({ queryKey: ['business'] }),
       ]);
       router.replace({ pathname: '/(app)/orders/[id]', params: { id: order.id } });
     } catch (cause) {
-      if (cause instanceof BjApiError && !cause.ambiguous) pending.current = undefined;
+      const ambiguous = !(cause instanceof BjApiError) || cause.ambiguous;
+      if (confirming && ambiguous) setSubmissionUncertain(true);
+      else if (!ambiguous) {
+        pending.current = undefined;
+        setQuote(undefined);
+        setSubmissionUncertain(false);
+      }
       setMessage(
         cause instanceof BjApiError
           ? cause.message
@@ -1331,6 +1412,7 @@ export function OrderBuilder() {
           item={item}
           catalog={catalog.data!}
           onChange={(next) => updateItem(index, next)}
+          disabled={formLocked}
           onRemove={() => {
             pending.current = undefined;
             setQuote(undefined);
@@ -1346,15 +1428,16 @@ export function OrderBuilder() {
       ) : null}
       {pending.current && !busy ? (
         <Notice kind="warning">
-          La comanda está lista para confirmar. Si hubo un error de conexión, reintenta la misma
-          solicitud.
+          {submissionUncertain
+            ? 'La respuesta pudo perderse después de guardar. Reintenta esta misma comanda; el carrito quedó bloqueado para evitar duplicarla.'
+            : 'La comanda está lista para confirmar. Revisa la cotización antes de continuar.'}
         </Notice>
       ) : null}
       {items.length ? (
         <Button
           label="Vaciar carrito"
           secondary
-          disabled={busy}
+          disabled={formLocked}
           onPress={() => {
             pending.current = undefined;
             setQuote(undefined);
@@ -1371,6 +1454,7 @@ export function OrderBuilder() {
       <Button
         label="Importar pedido de WhatsApp"
         secondary
+        disabled={formLocked}
         onPress={() => {
           setCartOpen(false);
           router.push('/(app)/orders/import');
@@ -1398,6 +1482,12 @@ export function OrderBuilder() {
           <Notice kind="warning">El POS aún no está habilitado en este servidor.</Notice>
         ) : null}
         {message ? <Notice kind={enabled ? 'error' : 'warning'}>{message}</Notice> : null}
+        {submissionUncertain ? (
+          <Notice kind="warning">
+            La respuesta pudo perderse después de guardar. Reintenta esta misma comanda; el carrito
+            quedó bloqueado para evitar duplicarla.
+          </Notice>
+        ) : null}
         {categoryId === 'extras' ? (
           <Notice>
             {modifierTarget
@@ -1405,9 +1495,15 @@ export function OrderBuilder() {
               : 'Agrega primero una hamburguesa, hot dog o complemento para asignarle extras.'}
           </Notice>
         ) : null}
-        <Field label="Buscar producto" value={search} onChangeText={setSearch} />
+        <Field
+          label="Buscar producto"
+          value={search}
+          editable={!formLocked}
+          onChangeText={setSearch}
+        />
         <ScrollView
           horizontal
+          scrollEnabled={!formLocked}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.row}
         >
@@ -1416,6 +1512,7 @@ export function OrderBuilder() {
               key={category.id}
               label={category.name}
               selected={categoryId === category.id}
+              disabled={formLocked}
               onPress={() => setCategoryId(category.id)}
             />
           ))}
@@ -1447,6 +1544,7 @@ export function OrderBuilder() {
                   name={modifier.name}
                   priceCents={modifier.priceCents}
                   actionLabel="Extra"
+                  disabled={formLocked}
                   onPress={() => addModifier(modifier.id)}
                 />
               ))
@@ -1462,6 +1560,7 @@ export function OrderBuilder() {
                 name={product.name}
                 priceCents={product.priceCents}
                 actionLabel="Agregar"
+                disabled={formLocked}
                 onPress={() => addProduct(product)}
               />
             ))
@@ -1561,6 +1660,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panelRaised,
     transform: [{ scale: 0.98 }],
   },
+  productTileDisabled: { opacity: 0.55 },
   productTileName: {
     minHeight: 38,
     color: colors.text,

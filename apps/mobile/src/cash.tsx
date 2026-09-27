@@ -80,6 +80,29 @@ export function CashPage() {
     });
   };
   if (q.isLoading || capabilities.isLoading) return <Loading label="Cargando caja…" />;
+  if (q.isError || capabilities.isError) {
+    const queryError = q.error ?? capabilities.error;
+    return (
+      <ScrollScreen>
+        <SectionTitle
+          title="Caja"
+          action={
+            <Button
+              label="Reintentar"
+              secondary
+              disabled={q.isFetching || capabilities.isFetching}
+              onPress={() => void Promise.all([q.refetch(), capabilities.refetch()])}
+            />
+          }
+        />
+        <Notice kind="error">
+          {queryError instanceof BjApiError
+            ? queryError.message
+            : 'No se pudo consultar la caja. No inicies un turno hasta confirmar el estado del servidor.'}
+        </Notice>
+      </ScrollScreen>
+    );
+  }
   const session = q.data?.session;
   const cashEnabled =
     capabilities.data?.some(
