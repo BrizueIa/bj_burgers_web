@@ -134,6 +134,7 @@ INSERT INTO confirmed_menu_recipe_lines(product_id,ingredient_name,quantity,unit
   ('mix-dog','Lechuga',1,'pz',true),('mix-dog','Tomate',1,'pz',true),('mix-dog','Cebolla',1,'pz',true),
   ('mix-dog','Pan de hot dog',1,'pz',false),('mix-dog','Salchicha premium',0.5,'pz',false),
   ('mix-dog','Salchichón',0.5,'pz',false),('mix-dog','Queso asadero',1,'pz',false),('mix-dog','Tocino',1,'pz',false),
+  ('jalapeno-cremoso','Jalapeño',1,'pz',false),('jalapeno-cremoso','Queso Philadelphia',25,'g',false),
   ('aros-200','Aros de cebolla',1,'pz',false);
 
 CREATE TEMP TABLE eligible_confirmed_menu_recipes ON COMMIT DROP AS

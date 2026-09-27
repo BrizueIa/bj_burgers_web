@@ -381,7 +381,8 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
         ('bj-dog','bj-dog','dogs','B&J Dog','',8900,true),
         ('mix-dog','mix-dog','dogs','Mix Dog','',8900,true),
         ('aros-200','aros-200','sides','Aros de cebolla','',5900,false),
-        ('aros-100','aros-100','sides','Porción de aros','',2600,false)
+        ('aros-100','aros-100','sides','Porción de aros','',2600,false),
+        ('jalapeno-cremoso','jalapeno-cremoso','sides','Jalapeño Cremoso','',2100,false)
       on conflict (id) do nothing`);
     await sql`insert into product_recipes(product_id,target_margin,overhead_cents)
       values('aros-200',65,0) on conflict(product_id) do nothing`;
@@ -461,6 +462,17 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       { version_number: 1, status: 'retired', quantity: '200.000' },
       { version_number: 2, status: 'active', quantity: '1.000' },
     ]);
+    const jalapenoRecipe = await sql<{ name: string; quantity: string }[]>`
+      select ingredient.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='jalapeno-cremoso' and version.status='active'
+      order by ingredient.name`;
+    expect(jalapenoRecipe).toEqual([
+      { name: 'Jalapeño', quantity: '1.000' },
+      { name: 'Queso Philadelphia', quantity: '25.000' },
+    ]);
     const oldRingSide = await sql<{ available: boolean; name: string }[]>`
       select available,name from products where id='aros-100'`;
     expect(oldRingSide).toEqual([
@@ -481,6 +493,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       'mix-dog',
       'aros-200',
       'aros-100',
+      'jalapeno-cremoso',
     ]})`;
     await sql`delete from recipe_lines where product_id = any(${[
       'clasica',
@@ -497,6 +510,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       'mix-dog',
       'aros-200',
       'aros-100',
+      'jalapeno-cremoso',
     ]})`;
     await sql`delete from product_recipes where product_id = any(${[
       'clasica',
@@ -513,6 +527,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       'mix-dog',
       'aros-200',
       'aros-100',
+      'jalapeno-cremoso',
     ]})`;
     await sql`delete from products where id = any(${[
       'clasica',
@@ -529,6 +544,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       'mix-dog',
       'aros-200',
       'aros-100',
+      'jalapeno-cremoso',
     ]})`;
     await sql`delete from categories where id in ('dogs','sides')`;
   });
