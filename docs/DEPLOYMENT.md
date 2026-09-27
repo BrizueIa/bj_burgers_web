@@ -28,6 +28,8 @@ Hostname provisional recomendado: `bj-<ip-publica-con-guiones>.sslip.io`. Config
 
 Generar el hash del administrador con `pnpm --filter @bj/api admin:hash -- "contraseña"`. No conservar la contraseña en variables después de crear la cuenta.
 
+En el archivo `.env` de Compose, guardar `ADMIN_PASSWORD_HASH` entre comillas simples. Los hashes Argon2id contienen `$`, que Compose interpreta como expansión de variables si el valor no está entrecomillado; al renderizar la configuración no deben aparecer advertencias de variables `argon2id`, `v` o `m` sin definir.
+
 Después del primer despliegue, abrir la consola del contenedor API y ejecutar una sola vez:
 
 ```sh

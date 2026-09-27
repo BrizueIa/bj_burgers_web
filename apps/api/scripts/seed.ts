@@ -1,4 +1,5 @@
 import { hash } from '@node-rs/argon2';
+import { readFile } from 'node:fs/promises';
 import { seedCatalog } from '@bj/contracts';
 import { createDatabase } from '../src/db/client.js';
 
@@ -129,6 +130,17 @@ async function seed() {
         values (${prize.id}, ${prize.label}, ${prize.emoji}, ${prize.weight}, ${prize.inventory}, ${json(prize.targetSegments)})
         on conflict (id) do nothing`;
     }
+  });
+
+  // Fresh installs run migrations before inserting the catalog. Re-run this
+  // idempotent menu migration after catalog seeding so confirmed portions can
+  // become active recipes on both fresh and existing databases.
+  const confirmedMenuRecipes = await readFile(
+    new URL('../migrations/0024_exact_menu_recipes.sql', import.meta.url),
+    'utf8',
+  );
+  await database.sql.begin(async (tx) => {
+    await tx.unsafe(confirmedMenuRecipes);
   });
 
   const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();

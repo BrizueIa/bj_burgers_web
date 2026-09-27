@@ -51,6 +51,7 @@ let sql: Sql;
 const device = randomUUID();
 const adminUser = randomUUID();
 const ingredient = randomUUID();
+const tocinoIngredient = randomUUID();
 function adapter(db: { query: PGlite['query'] }) {
   const tag = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.reduce((s, part, i) => s + (i ? `$${i}` : '') + part, '');
@@ -120,6 +121,11 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0017_refund_item_reference.sql',
       '0018_manual_order_discounts.sql',
       '0019_menu_catalog_corrections.sql',
+      '0020_mobile_pos_operability.sql',
+      '0021_inventory_catalog_and_negative_balances.sql',
+      '0022_exact_catalog_recipes.sql',
+      '0023_recipe_modifier_inventory.sql',
+      '0024_exact_menu_recipes.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -222,8 +228,329 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     );
   });
 
+  it('inicia el catálogo de ingredientes con saldo cero y la migración se puede repetir', async () => {
+    const migration = await readFile(
+      new URL('../migrations/0021_inventory_catalog_and_negative_balances.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(migration);
+    await pg.exec(migration);
+    const rows = await sql<{ name: string; stock: string }[]>`
+      select name,stock::text from stock_ingredients where name in ('Mayonesa','Carne Angus','Papas','Pan de hamburguesa') order by name`;
+    expect(rows).toEqual([
+      { name: 'Carne Angus', stock: '0.000' },
+      { name: 'Mayonesa', stock: '0.000' },
+      { name: 'Pan de hamburguesa', stock: '0.000' },
+      { name: 'Papas', stock: '0.000' },
+    ]);
+  });
+
+  it('activa recetas solo para porciones con cantidades publicadas y refrescos por pieza', async () => {
+    await pg.exec(
+      "insert into categories(id,slug,name) values('sides','sides','Complementos'),('drinks','drinks','Bebidas') on conflict (id) do nothing",
+    );
+    await pg.exec(`
+      insert into products(id,slug,category_id,name,description,price_cents,ingredients) values
+        ('papas-250','papas-250','sides','Orden de papas','',4900,'["Papas"]'),
+        ('aros-200','aros-200','sides','Aros de cebolla','',5900,'["Aros de cebolla"]'),
+        ('aros-100','aros-100','sides','Porción de aros','',2600,'["Aros de cebolla"]'),
+        ('coca-cola','coca-cola','drinks','Coca-Cola','',3900,'[]'),
+        ('coca-cola-zero','coca-cola-zero','drinks','Coca-Cola Zero','',3600,'[]'),
+        ('delaware','delaware','drinks','Delaware','',3600,'[]'),
+        ('escuis','escuis','drinks','Escuis','',3600,'[]'),
+        ('fanta','fanta','drinks','Fanta','',3600,'[]')
+      on conflict (id) do nothing;
+    `);
+    await pg.exec(
+      await readFile(
+        new URL('../migrations/0021_inventory_catalog_and_negative_balances.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+    const migration = await readFile(
+      new URL('../migrations/0022_exact_catalog_recipes.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(migration);
+    await pg.exec(migration);
+
+    const recipes = await pg.query<{
+      product_id: string;
+      ingredient: string;
+      quantity: string;
+      stock: string;
+      active_versions: number;
+    }>(`
+      select line.product_id,ingredient.name as ingredient,line.quantity::text,ingredient.stock::text,
+        (select count(*)::int from recipe_versions version
+         where version.product_id=line.product_id and version.status='active') as active_versions
+      from recipe_lines line join stock_ingredients ingredient on ingredient.id=line.ingredient_id
+      where line.product_id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta')
+      order by line.product_id
+    `);
+    expect(recipes.rows).toEqual([
+      {
+        product_id: 'aros-100',
+        ingredient: 'Aros de cebolla',
+        quantity: '100.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'aros-200',
+        ingredient: 'Aros de cebolla',
+        quantity: '200.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'coca-cola',
+        ingredient: 'Coca-Cola',
+        quantity: '1.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'coca-cola-zero',
+        ingredient: 'Coca-Cola Zero',
+        quantity: '1.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'delaware',
+        ingredient: 'Delaware',
+        quantity: '1.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'escuis',
+        ingredient: 'Escuis',
+        quantity: '1.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'fanta',
+        ingredient: 'Fanta',
+        quantity: '1.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+      {
+        product_id: 'papas-250',
+        ingredient: 'Papas',
+        quantity: '250.000',
+        stock: '0.000',
+        active_versions: 1,
+      },
+    ]);
+    await pg.exec(`
+      delete from recipe_version_components component using recipe_versions version
+        where component.recipe_version_id=version.id and version.product_id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
+      delete from recipe_versions where product_id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
+      delete from recipe_lines where product_id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
+      delete from product_recipes where product_id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
+      delete from products where id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
+      delete from categories where id in ('sides','drinks');
+    `);
+  });
+
+  it('instala las recetas confirmadas con unidades coherentes y porciones exactas de aros', async () => {
+    const inventoryMigration = await readFile(
+      new URL('../migrations/0021_inventory_catalog_and_negative_balances.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(inventoryMigration);
+    await pg.exec(
+      "insert into categories(id,slug,name) values('dogs','dogs','Hot dogs'),('sides','sides','Complementos') on conflict (id) do nothing",
+    );
+    await pg.exec(`insert into products(id,slug,category_id,name,description,price_cents,combo_eligible)
+      values
+        ('clasica','clasica','burgers','Clásica','',6900,true),
+        ('hawaiana','hawaiana','burgers','Hawaiana','',8900,true),
+        ('bj-smash','bj-smash','burgers','B&J Smash','',10900,true),
+        ('salchiburger','salchiburger','burgers','Salchiburger','',8900,true),
+        ('bbq','bbq','burgers','BBQ','',9900,true),
+        ('monstruosa','monstruosa','burgers','Monstruosa','',18900,true),
+        ('dog-clasico','dog-clasico','dogs','Dog Clásico','',5900,true),
+        ('bacon-dog','bacon-dog','dogs','Bacon Dog','',6900,true),
+        ('salchi-dog','salchi-dog','dogs','Salchi Dog','',6900,true),
+        ('crispy-dog','crispy-dog','dogs','Crispy Dog','',8900,true),
+        ('bj-dog','bj-dog','dogs','B&J Dog','',8900,true),
+        ('mix-dog','mix-dog','dogs','Mix Dog','',8900,true),
+        ('aros-200','aros-200','sides','Aros de cebolla','',5900,false),
+        ('aros-100','aros-100','sides','Porción de aros','',2600,false),
+        ('jalapeno-cremoso','jalapeno-cremoso','sides','Jalapeño Cremoso','',2100,false)
+      on conflict (id) do nothing`);
+    await sql`insert into product_recipes(product_id,target_margin,overhead_cents)
+      values('aros-200',65,0) on conflict(product_id) do nothing`;
+    const [oldRingVersion] = await sql<{ id: string }[]>`
+      insert into recipe_versions(product_id,version_number,target_margin,overhead_cents,status,activated_at)
+      values('aros-200',1,65,0,'active',now()) returning id`;
+    const [oldRingIngredient] = await sql<{ id: string }[]>`
+      select id from stock_ingredients where name='Aros de cebolla'`;
+    await sql`insert into recipe_version_components(
+      recipe_version_id,component_kind,ingredient_id,quantity
+    ) values(${oldRingVersion!.id},'ingredient',${oldRingIngredient!.id},200)`;
+    await sql`insert into recipe_lines(product_id,ingredient_id,quantity)
+      values('aros-200',${oldRingIngredient!.id},200)`;
+    const menuMigration = await readFile(
+      new URL('../migrations/0024_exact_menu_recipes.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(menuMigration);
+    await pg.exec(menuMigration);
+
+    const ingredients = await sql<{ name: string; unit: string }[]>`
+      select name,unit from stock_ingredients where name in ('Mayonesa','Queso americano','Pan brioche') order by name`;
+    expect(ingredients).toEqual([
+      { name: 'Mayonesa', unit: 'g' },
+      { name: 'Pan brioche', unit: 'pz' },
+      { name: 'Queso americano', unit: 'pz' },
+    ]);
+    expect(
+      await sql<
+        { unit: string }[]
+      >`select unit from stock_ingredients where name='Aros de cebolla'`,
+    ).toEqual([{ unit: 'pz' }]);
+    const classicLines = await sql<{ name: string; quantity: string }[]>`
+      select ingredient.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='clasica' and version.status='active'
+      order by ingredient.name`;
+    expect(classicLines).toEqual(
+      expect.arrayContaining([
+        { name: 'Carne Angus', quantity: '150.000' },
+        { name: 'Mayonesa', quantity: '15.000' },
+        { name: 'Queso americano', quantity: '1.000' },
+      ]),
+    );
+    const ringRecipes = await sql<{ product_id: string; quantity: string }[]>`
+      select version.product_id,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id in ('bbq','monstruosa','crispy-dog')
+        and version.status='active' and ingredient.name='Aros de cebolla'
+      order by version.product_id`;
+    expect(ringRecipes).toEqual([
+      { product_id: 'bbq', quantity: '2.000' },
+      { product_id: 'crispy-dog', quantity: '2.000' },
+      { product_id: 'monstruosa', quantity: '2.000' },
+    ]);
+    const ringSide = await sql<{ name: string; quantity: string }[]>`
+      select product.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      join products product on product.id=version.product_id
+      where version.product_id='aros-200' and version.status='active'
+        and ingredient.name='Aros de cebolla'`;
+    expect(ringSide).toEqual([{ name: 'Aro de cebolla', quantity: '1.000' }]);
+    const ringHistory = await sql<{ version_number: number; status: string; quantity: string }[]>`
+      select version.version_number,version.status,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='aros-200' and ingredient.name='Aros de cebolla'
+      order by version.version_number`;
+    expect(ringHistory).toEqual([
+      { version_number: 1, status: 'retired', quantity: '200.000' },
+      { version_number: 2, status: 'active', quantity: '1.000' },
+    ]);
+    const jalapenoRecipe = await sql<{ name: string; quantity: string }[]>`
+      select ingredient.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='jalapeno-cremoso' and version.status='active'
+      order by ingredient.name`;
+    expect(jalapenoRecipe).toEqual([
+      { name: 'Jalapeño', quantity: '1.000' },
+      { name: 'Queso Philadelphia', quantity: '25.000' },
+    ]);
+    const oldRingSide = await sql<{ available: boolean; name: string }[]>`
+      select available,name from products where id='aros-100'`;
+    expect(oldRingSide).toEqual([
+      { available: false, name: 'Porción de aros de cebolla (descontinuada)' },
+    ]);
+    await sql`delete from recipe_versions where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+      'jalapeno-cremoso',
+    ]})`;
+    await sql`delete from recipe_lines where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+      'jalapeno-cremoso',
+    ]})`;
+    await sql`delete from product_recipes where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+      'jalapeno-cremoso',
+    ]})`;
+    await sql`delete from products where id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+      'jalapeno-cremoso',
+    ]})`;
+    await sql`delete from categories where id in ('dogs','sides')`;
+  });
+
   it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
-    await purchase(1000, 10000);
+    await purchase(100, 1000);
     const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
     await createRecipeVersion(
       sql,
@@ -292,7 +619,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     let [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
       select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
       from stock_ingredients where id=${ingredient}`;
-    expect(balance).toEqual({ stock: '1000.000', reserved: '150.000', active: 1 });
+    expect(balance).toEqual({ stock: '100.000', reserved: '150.000', active: 1 });
     await updateOrderStatus(sql, created.order.id, 'preparing', '', device, notifier, randomUUID());
     await updateOrderStatus(sql, created.order.id, 'ready', '', device, notifier, randomUUID());
     await updateOrderStatus(
@@ -307,7 +634,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     [balance] = await sql<{ stock: string; reserved: string; active: number }[]>`
       select stock::text,reserved::text,(select count(*)::int from stock_reservations where status='active') as active
       from stock_ingredients where id=${ingredient}`;
-    expect(balance).toEqual({ stock: '850.000', reserved: '0.000', active: 0 });
+    expect(balance).toEqual({ stock: '-50.000', reserved: '0.000', active: 0 });
     const [allocation] = await sql<{ classification: string; cost_cents: string }[]>`
       select classification,cost_cents::text from order_cost_allocations where order_id=${created.order.id}`;
     expect(allocation).toEqual({ classification: 'waste', cost_cents: '1500.000000' });
@@ -535,6 +862,16 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       expectedCents: 1500,
       differenceCents: -50,
     });
+    const report = await cashSessionState(sql);
+    expect(report.session).toBeNull();
+    expect(report.lastClosedSession).toMatchObject({
+      id: opened.result.session!.id,
+      expectedCents: 1500,
+      countedCents: 1450,
+      differenceCents: -50,
+      status: 'closed',
+    });
+    expect(report.recentClosings).toEqual([report.lastClosedSession]);
   });
 
   it('cobra pagos mixtos, calcula cambio y descuenta el reembolso de caja', async () => {
@@ -904,9 +1241,33 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     ).rejects.toThrow('Activa primero: stock_ledger');
   });
 
-  it('no inventa costos para ingredientes sin compras', async () => {
+  it('permite vender con saldo negativo y marca el costo pendiente si aún no hay costo', async () => {
     expect((await state()).products[0]!.cost_cents).toBeNull();
-    await expect(sale()).rejects.toThrow('Existencia o costo insuficiente');
+    const sold = await sale();
+    expect(sold.entry).toMatchObject({ cost_cents: 0, cost_pending: true });
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(-150);
+    expect((await state()).report).toMatchObject({
+      sales_count: 1,
+      cost_cents: '0',
+      uncosted_sales_count: 1,
+      uncosted_sales_cents: '10000',
+    });
+    await countStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        countedQuantity: '850',
+        unitCostCents: '10',
+        reason: 'Inventario inicial',
+      },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
+    expect((await state()).ingredients[0]).toMatchObject({
+      stock: '850.000',
+      value_cents: '8500.000000',
+    });
+    expect((await state()).report!.uncosted_sales_count).toBe(1);
   });
   it('promedia compras y conserva el costo histórico al reabastecer', async () => {
     await purchase(1000, 10000);
@@ -929,27 +1290,26 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     });
     expect(after.products[0]!.cost_cents).not.toBe(2350);
   });
-  it('revierte todas las líneas si una venta supera el stock', async () => {
+  it('permite venta con saldo negativo si no hay reservas activas y conserva su costo', async () => {
     await purchase(200, 2000);
-    await expect(
-      recordEntry(
-        sql,
-        {
-          kind: 'sale',
-          expectedTotalCents: 20000,
-          description: 'No alcanza',
-          payment: 'cash',
-          idempotencyKey: randomUUID(),
-          lines: [
-            { productId: 'burger', quantity: 1 },
-            { productId: 'burger', quantity: 1 },
-          ],
-        },
-        device,
-      ),
-    ).rejects.toThrow('Existencia');
-    expect(Number((await state()).ingredients[0]!.stock)).toBe(200);
-    expect((await state()).report!.sales_count).toBe(0);
+    const sold = await recordEntry(
+      sql,
+      {
+        kind: 'sale',
+        expectedTotalCents: 20000,
+        description: 'No alcanza',
+        payment: 'cash',
+        idempotencyKey: randomUUID(),
+        lines: [
+          { productId: 'burger', quantity: 1 },
+          { productId: 'burger', quantity: 1 },
+        ],
+      },
+      device,
+    );
+    expect(sold.entry).toMatchObject({ cost_cents: 3200, cost_pending: false });
+    expect(Number((await state()).ingredients[0]!.stock)).toBe(-100);
+    expect((await state()).report!.sales_count).toBe(1);
   });
   it('reintentar compras y cobros no duplica movimientos', async () => {
     const purchaseKey = randomUUID(),
@@ -1047,7 +1407,22 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     await expect(sale(1, randomUUID(), 9999)).rejects.toThrow('El precio cambió');
     expect(Number((await state()).ingredients[0]!.stock)).toBe(1000);
   });
-  it('persiste reservas y evita que dos operaciones tomen la misma disponibilidad', async () => {
+  it('registra la venta bajo cero con costo de reposición y valor de inventario en cero', async () => {
+    await purchase(100, 1000);
+    await sale(1);
+    const current = await state();
+    expect(current.ingredients[0]).toMatchObject({ stock: '-50.000', value_cents: '0.000000' });
+    expect(current.report?.cost_cents).toBe('1600');
+  });
+  it('una compra posterior cubre el faltante y valora solo el saldo físico restante', async () => {
+    await purchase(100, 1000);
+    await sale(1);
+    await purchase(100, 1200);
+    const current = await state();
+    expect(current.ingredients[0]).toMatchObject({ stock: '50.000', value_cents: '600.000000' });
+    expect(Number(current.ingredients[0]?.unit_cost)).toBe(12);
+  });
+  it('persiste reservas aunque la demanda supere existencias y permite disponibilidad negativa', async () => {
     await purchase(1000, 10000);
     const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
     const first = await reserveStock(
@@ -1063,20 +1438,25 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       actor,
     );
     expect(first.result.ingredient.available).toBe('200.000');
-    await expect(
-      reserveStock(
-        sql,
-        {
-          idempotencyKey: randomUUID(),
-          ingredientId: ingredient,
-          quantity: '201',
-          referenceType: 'test',
-          referenceId: 'two',
-          reason: 'Prueba concurrente',
-        },
-        actor,
-      ),
-    ).rejects.toThrow('disponible');
+    const second = await reserveStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '201',
+        referenceType: 'test',
+        referenceId: 'two',
+        reason: 'Prueba con existencia negativa',
+      },
+      actor,
+    );
+    expect(second.result.ingredient.available).toBe('-1.000');
+    await releaseStockReservation(
+      sql,
+      second.result.reservation.id,
+      { idempotencyKey: randomUUID(), reason: 'Liberar segunda reserva' },
+      actor,
+    );
     await releaseStockReservation(
       sql,
       first.result.reservation.id,
@@ -1152,6 +1532,27 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
     expect(ledger.ingredients[0]).toMatchObject({ stock: '800.000', value_cents: '8000.000000' });
     expect(ledger.movements.map((item) => item.movement_type)).toContain('count');
     expect(ledger.movements.map((item) => item.movement_type)).toContain('waste');
+  });
+  it('registra merma por encima de existencias con el costo conocido y saldo bajo cero', async () => {
+    await purchase(100, 1000);
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    await writeOffStock(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        ingredientId: ingredient,
+        quantity: '150',
+        reason: 'Ajuste real de merma',
+        cause: 'waste',
+      },
+      actor,
+    );
+    const ledger = await stockLedgerState(sql);
+    expect(ledger.ingredients[0]).toMatchObject({ stock: '-50.000', value_cents: '0.000000' });
+    expect(ledger.movements[0]).toMatchObject({
+      movement_type: 'waste',
+      value_delta_cents: '-1500.000000',
+    });
   });
   it('prorratea descuentos y gastos de compra sin alterar la equivalencia histórica', async () => {
     const supplier = randomUUID(),
@@ -1250,6 +1651,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       productId: 'burger',
       targetMargin: 60,
       overheadCents: 100,
+      priceCents: 8500,
       components: [
         {
           kind: 'ingredient' as const,
@@ -1272,9 +1674,14 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       actor,
     );
     expect(second.result.versionNumber).toBe(2);
-    const state = await recipeVersionState(sql, 'burger');
-    expect(state.versions.map((version) => version.status)).toEqual(['active', 'retired']);
-    expect(state.components).toHaveLength(2);
+    const versions = await recipeVersionState(sql, 'burger');
+    expect(versions.versions.map((version) => version.status)).toEqual(['active', 'retired']);
+    expect(versions.components).toHaveLength(2);
+    const business = await state();
+    expect(business.products[0]?.price_cents).toBe(8500);
+    expect(business.recipes).toContainEqual(
+      expect.objectContaining({ product_id: 'burger', quantity: '150.000' }),
+    );
     await expect(
       createRecipeVersion(
         sql,
@@ -1349,5 +1756,226 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       value_cents: '3000.000000',
     });
     expect(ledger.movements.map((item) => item.movement_type)).toContain('production_output');
+  });
+
+  it('costea y reserva el insumo físico de un extra sin sumarlo al costo base', async () => {
+    await pg.query("insert into stock_ingredients(id,name,unit) values($1,'Tocino','g')", [
+      tocinoIngredient,
+    ]);
+    await pg.query(
+      "insert into modifiers(id,group_id,name,price_cents) values('extra-tocino','extras','Tocino',1600) on conflict (id) do update set name=excluded.name",
+    );
+    await purchase(1000, 10000);
+    await recordEntry(
+      sql,
+      {
+        kind: 'purchase',
+        description: 'Compra de tocino',
+        idempotencyKey: randomUUID(),
+        lines: [{ ingredientId: tocinoIngredient, quantity: 1000, totalCents: 5000 }],
+      },
+      device,
+    );
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 0,
+        priceCents: 10000,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150',
+            removable: false,
+            extra: false,
+          },
+          {
+            kind: 'modifier',
+            modifierId: 'extra-tocino',
+            ingredientId: tocinoIngredient,
+            quantity: '30',
+            removable: false,
+            extra: true,
+          },
+        ],
+      },
+      { kind: 'device', deviceId: device, origin: 'android' },
+    );
+    const sourceProduct = seedCatalog.products[0]!;
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...sourceProduct,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+      ],
+      modifiers: [{ id: 'extra-tocino', name: 'Tocino', priceCents: 1600, available: true }],
+      promotions: [],
+    };
+    const input = {
+      idempotencyKey: randomUUID(),
+      fulfillment: 'counter' as const,
+      customerName: '',
+      neighborhood: '',
+      streetAndNumber: '',
+      manualDiscountCents: 0,
+      manualDiscountReason: '',
+      quotedTotalCents: 11600,
+      items: [
+        {
+          productId: 'burger',
+          quantity: 1,
+          removedIngredients: [],
+          modifierIds: ['extra-tocino'],
+          combo: false,
+          note: '',
+        },
+      ],
+    };
+    const created = await createUnifiedOrder(
+      sql,
+      catalog,
+      input,
+      device,
+      new InMemoryOrderNotifier(),
+    );
+    const reservations = await sql<{ ingredient_id: string; quantity: string }[]>`
+      select reservation.ingredient_id,reservation.quantity::text
+      from order_stock_reservations link
+      join stock_reservations reservation on reservation.id=link.reservation_id
+      where link.order_id=${created.order.id} order by reservation.ingredient_id`;
+    expect(reservations).toHaveLength(2);
+    expect(reservations).toEqual(
+      expect.arrayContaining([
+        { ingredient_id: ingredient, quantity: '150.000' },
+        { ingredient_id: tocinoIngredient, quantity: '30.000' },
+      ]),
+    );
+    expect((await state()).products[0]?.cost_cents).toBe(1500);
+  });
+
+  it('reserva los 100 g de papas y la bebida del combo junto con la receta principal', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const potatoesId = randomUUID();
+    const drinkId = randomUUID();
+    await sql`insert into stock_ingredients(id,name,unit) values
+      (${potatoesId},'Papas','g'),(${drinkId},'Coca-Cola','pz')`;
+    await pg.exec(
+      "insert into categories(id,slug,name) values('drinks','drinks','Bebidas') on conflict (id) do nothing",
+    );
+    await pg.exec(
+      "insert into products(id,slug,category_id,name,description,price_cents) values('coca-cola','coca-cola','drinks','Coca-Cola','',3600) on conflict (id) do nothing",
+    );
+    await pg.exec("update products set combo_eligible=true where id='burger'");
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'coca-cola',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: drinkId,
+            quantity: '1',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...seedCatalog.products[0]!,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+        seedCatalog.products.find((product) => product.id === 'coca-cola')!,
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const created = await createUnifiedOrder(
+      sql,
+      catalog,
+      {
+        idempotencyKey: randomUUID(),
+        fulfillment: 'counter',
+        customerName: '',
+        neighborhood: '',
+        streetAndNumber: '',
+        manualDiscountCents: 0,
+        manualDiscountReason: '',
+        quotedTotalCents: 14600,
+        items: [
+          {
+            productId: 'burger',
+            quantity: 1,
+            removedIngredients: [],
+            modifierIds: [],
+            combo: true,
+            drinkProductId: 'coca-cola',
+            note: '',
+          },
+        ],
+      },
+      device,
+      new InMemoryOrderNotifier(),
+    );
+    const reservations = await sql<{ ingredient_id: string; quantity: string }[]>`
+      select reservation.ingredient_id,reservation.quantity::text
+      from order_stock_reservations link
+      join stock_reservations reservation on reservation.id=link.reservation_id
+      where link.order_id=${created.order.id} order by reservation.ingredient_id`;
+    expect(reservations).toEqual(
+      expect.arrayContaining([
+        { ingredient_id: ingredient, quantity: '150.000' },
+        { ingredient_id: potatoesId, quantity: '100.000' },
+        { ingredient_id: drinkId, quantity: '1.000' },
+      ]),
+    );
+    const [snapshot] = await sql<
+      { composition_snapshot: { combo?: boolean; quantity?: string }[] }[]
+    >`
+      select composition_snapshot from order_items where order_id=${created.order.id}`;
+    expect(snapshot?.composition_snapshot).toEqual(
+      expect.arrayContaining([expect.objectContaining({ combo: true, quantity: '100.000' })]),
+    );
   });
 });

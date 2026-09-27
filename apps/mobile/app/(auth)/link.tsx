@@ -30,7 +30,7 @@ export default function LinkDeviceScreen() {
   };
   return (
     <ScrollScreen>
-      <Card style={{ marginTop: 60, maxWidth: 520, alignSelf: 'center', width: '100%' }}>
+      <Card style={{ maxWidth: 520, alignSelf: 'center', width: '100%' }}>
         <Text style={[shared.title, { color: colors.gold }]}>B&J Burgers</Text>
         <Text style={shared.title}>Vincular este Android</Text>
         <Text style={shared.subtitle}>

@@ -18,17 +18,30 @@ const recipeComponentSchema = z
     const references = [component.ingredientId, component.productId, component.modifierId].filter(
       Boolean,
     );
-    if (references.length !== 1)
+    const modifierIngredient = component.kind === 'modifier' && component.ingredientId;
+    const expectedReferences = modifierIngredient ? 2 : 1;
+    if (references.length !== expectedReferences)
       context.addIssue({ code: 'custom', message: 'Cada componente requiere una referencia.' });
     if (
       (component.kind === 'ingredient' || component.kind === 'packaging') &&
-      !component.ingredientId
+      (!component.ingredientId || component.productId || component.modifierId)
     )
       context.addIssue({ code: 'custom', message: 'El componente requiere un insumo.' });
-    if (component.kind === 'product' && !component.productId)
+    if (
+      component.kind === 'product' &&
+      (!component.productId || component.ingredientId || component.modifierId)
+    )
       context.addIssue({ code: 'custom', message: 'El componente requiere un producto.' });
-    if (component.kind === 'modifier' && !component.modifierId)
-      context.addIssue({ code: 'custom', message: 'El componente requiere un extra.' });
+    if (
+      component.kind === 'modifier' &&
+      (!component.modifierId || !component.ingredientId || !component.extra)
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'El extra requiere una porción de inventario vinculada.',
+      });
+    if (component.kind !== 'modifier' && component.modifierId)
+      context.addIssue({ code: 'custom', message: 'El vínculo con extra no corresponde.' });
   });
 
 export const recipeVersionCreateSchema = z.object({
@@ -36,6 +49,7 @@ export const recipeVersionCreateSchema = z.object({
   productId: z.string().min(1),
   targetMargin: z.number().int().min(1).max(95),
   overheadCents: z.number().int().min(0).max(100_000_000),
+  priceCents: z.number().int().min(0).max(100_000_000).optional(),
   components: z.array(recipeComponentSchema).min(1).max(100),
 });
 export const recipeVersionMutationResponseSchema = z.object({

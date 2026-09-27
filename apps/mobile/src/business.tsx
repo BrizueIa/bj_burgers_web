@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { BjApiError, createIdempotencyKey } from '@bj/api-client';
 import type { UnifiedOrderConfirm } from '@bj/contracts';
 import type { BusinessState } from '@bj/contracts';
 import { api } from './api';
 import { businessLoadErrorMessage } from './business-error';
 import { centsFromInput, money, numberValue, quantity, startOfToday } from './format';
+import { recipeTemplateForProduct } from './recipe-template';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
 
@@ -27,6 +28,15 @@ function dayWindow() {
   const to = new Date(from);
   to.setDate(to.getDate() + 1);
   return { from, to };
+}
+function localDate(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+function inclusiveDateRange(range: { from: Date; to: Date }) {
+  const last = new Date(range.to);
+  if (last.getHours() === 0 && last.getMinutes() === 0 && last.getSeconds() === 0)
+    last.setDate(last.getDate() - 1);
+  return { from: localDate(range.from), to: localDate(last) };
 }
 function windowFor(days: number) {
   const to = new Date();
@@ -79,11 +89,21 @@ function DateWindow({
 
 export function BusinessPage({ section }: { section: BusinessSection }) {
   const [range, setRange] = useState(dayWindow);
+  const [businessSearch, setBusinessSearch] = useState('');
   const { data, error, isLoading, refetch, isFetching } = useBusiness(range);
   const capabilities = useQuery({
     queryKey: ['capabilities'],
     queryFn: () => api.capabilities(),
     staleTime: 60_000,
+  });
+  const profitabilityEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'profitability_reports' && capability.enabled,
+  );
+  const dates = inclusiveDateRange(range);
+  const dashboardReport = useQuery({
+    queryKey: ['dashboard-profitability', dates.from, dates.to],
+    queryFn: () => api.profitabilityReport(dates.from, dates.to, 1),
+    enabled: section === 'home' && profitabilityEnabled === true,
   });
   if (isLoading) return <Loading />;
   if (!data)
@@ -97,13 +117,27 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       </ScrollScreen>
     );
   const report = data.report;
-  const revenue = numberValue(report.revenue_cents);
-  const cost = numberValue(report.cost_cents);
-  const expenses = numberValue(report.expenses_cents);
-  const waste = numberValue(report.waste_cents);
+  const unifiedReport = dashboardReport.data?.summary;
+  const revenue = unifiedReport?.grossSalesCents ?? numberValue(report.revenue_cents);
+  const cost = unifiedReport?.costOfGoodsSoldCents ?? numberValue(report.cost_cents);
+  const uncostedSales = unifiedReport?.pendingCostCents ?? numberValue(report.uncosted_sales_cents);
+  const valuedRevenue = Math.max(0, revenue - uncostedSales);
+  const expenses = unifiedReport?.operatingExpensesCents ?? numberValue(report.expenses_cents);
+  const waste = unifiedReport?.wasteCents ?? numberValue(report.waste_cents);
+  const salesCount = unifiedReport?.deliveredOrders ?? report.sales_count;
   const lowStock = data.ingredients.filter(
     (ingredient) => numberValue(ingredient.stock) <= numberValue(ingredient.minimum),
   ).length;
+  const visibleIngredients = data.ingredients.filter((ingredient) =>
+    ingredient.name
+      .toLocaleLowerCase('es-MX')
+      .includes(businessSearch.trim().toLocaleLowerCase('es-MX')),
+  );
+  const visibleProducts = data.products.filter((product) =>
+    product.name
+      .toLocaleLowerCase('es-MX')
+      .includes(businessSearch.trim().toLocaleLowerCase('es-MX')),
+  );
   const stockLedgerEnabled = capabilities.data?.some(
     (capability) => capability.key === 'stock_ledger' && capability.enabled,
   );
@@ -127,10 +161,19 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             label={isFetching ? 'Actualizando…' : 'Actualizar'}
             secondary
             disabled={isFetching}
-            onPress={() => void refetch()}
+            onPress={() => {
+              void refetch();
+              if (section === 'home' && profitabilityEnabled) void dashboardReport.refetch();
+            }}
           />
         }
       />
+      {error ? (
+        <Notice kind="warning">
+          No se actualizó el negocio. Las cifras que ves corresponden a la última consulta
+          confirmada.
+        </Notice>
+      ) : null}
       {section === 'home' || section === 'reports' ? (
         <DateWindow range={range} onChange={setRange} />
       ) : null}
@@ -139,27 +182,48 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           <Metric
             label="Ventas cobradas"
             value={money(revenue)}
-            detail={`${report.sales_count} ventas`}
+            detail={`${salesCount} ventas entregadas`}
           />
           <Metric label="Costo de ventas" value={money(cost)} />
           <Metric
             label="Utilidad bruta"
-            value={money(revenue - cost)}
+            value={money(valuedRevenue - cost)}
             detail={
-              revenue ? `Margen ${(((revenue - cost) / revenue) * 100).toFixed(1)}%` : 'Sin ventas'
+              valuedRevenue
+                ? `Margen de ventas costeadas ${(((valuedRevenue - cost) / valuedRevenue) * 100).toFixed(1)}%`
+                : 'Sin ventas con costo completo'
             }
           />
           <Metric
             label="Resultado registrado"
-            value={money(revenue - cost - expenses - waste)}
+            value={money(unifiedReport?.operatingResultCents ?? revenue - cost - expenses - waste)}
             detail="Después de gastos y mermas"
           />
         </View>
       ) : null}
+      {data.report.uncosted_sales_count > 0 ||
+      data.report.uncosted_waste_count > 0 ||
+      (unifiedReport?.pendingCostCents ?? 0) > 0 ? (
+        <Notice kind="warning">
+          {(unifiedReport?.pendingCostCents ?? 0) > 0
+            ? `${unifiedReport?.unvaluedDeliveredOrders ?? 0} venta(s) por ${money(unifiedReport?.pendingCostCents ?? 0)} tienen costo pendiente y no se incluyen en la utilidad.`
+            : data.report.uncosted_sales_count > 0
+              ? `${data.report.uncosted_sales_count} venta(s) por ${money(data.report.uncosted_sales_cents)} tienen costo pendiente y no se incluyen en la utilidad.`
+              : ''}
+          {data.report.uncosted_sales_count > 0 && data.report.uncosted_waste_count > 0 ? '\n' : ''}
+          {data.report.uncosted_waste_count > 0
+            ? `${data.report.uncosted_waste_count} merma(s) no tienen costo calculable.`
+            : ''}
+        </Notice>
+      ) : null}
       {section === 'home' ? (
         <>
           <View style={styles.actions}>
-            <Button label="Nueva venta" onPress={() => openEditor('sale')} />
+            <Button
+              label="Nueva venta · POS"
+              disabled={!unifiedOrdersEnabled}
+              onPress={() => router.push('/(app)/pos')}
+            />
             <Button label="Registrar compra" secondary onPress={() => openEditor('purchase')} />
             <Button label="Comandas" secondary onPress={() => router.push('/(app)/orders')} />
             <Button label="Registrar gasto" secondary onPress={() => openEditor('expense')} />
@@ -171,29 +235,29 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               pendientes de costear
             </Text>
           </Card>
-          <Notice>
+          {dashboardReport.error ? (
+            <Notice kind="warning">
+              No se pudo actualizar el resumen del POS; las cifras mostradas pueden incluir solo los
+              registros anteriores.
+            </Notice>
+          ) : null}
+          <Notice dismissible compact>
             {unifiedOrdersEnabled
-              ? 'Las ventas nuevas se cotizan y reservan como comandas únicas. El cobro se integra desde Caja.'
-              : 'Empieza con ingredientes, compras y recetas. El POS unificado permanece deshabilitado hasta conciliar existencias.'}
+              ? 'El POS cotiza y reserva; cobra desde Caja.'
+              : 'Empieza con ingredientes, compras y recetas. El POS requiere habilitación del servidor.'}
           </Notice>
         </>
       ) : null}
       {section === 'pos' ? (
         <>
-          {!unifiedOrdersEnabled ? (
-            <Notice kind="warning">
-              El POS unificado aún no está habilitado por el servidor. Las operaciones confirmadas
-              seguirán el circuito disponible hasta que se complete la conciliación.
-            </Notice>
-          ) : null}
           <Text style={shared.subtitle}>
-            {unifiedOrdersEnabled
-              ? 'Cotiza y crea una sola comanda para mostrador, recoger o domicilio. Preparación y entrega se controlan desde Comandas.'
-              : 'Ventas de mostrador con precio de lista y consumo de receta. Las comandas actuales no registran todavía el cobro.'}
+            Cotiza y registra ventas desde el carrito del POS. Preparación, pago y entrega se
+            consultan desde Comandas y Caja.
           </Text>
           <Button
-            label={unifiedOrdersEnabled ? 'Nueva comanda' : 'Cobrar venta'}
-            onPress={() => openEditor('sale')}
+            label="Abrir POS · Nueva venta"
+            disabled={!unifiedOrdersEnabled}
+            onPress={() => router.push('/(app)/pos')}
           />
           <Button label="Ver comandas" secondary onPress={() => router.push('/(app)/orders')} />
           {data.products.map((product) => (
@@ -211,6 +275,10 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
       ) : null}
       {section === 'inventory' ? (
         <>
+          <Notice dismissible compact>
+            Existencias iniciales en 0; ventas y mermas admiten negativos. Registra un conteo para
+            regularizar el inventario.
+          </Notice>
           <View style={styles.actions}>
             <Button label="Ingrediente" onPress={() => openEditor('ingredient')} />
             <Button label="Compra" secondary onPress={() => openEditor('purchase')} />
@@ -221,8 +289,8 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
           </View>
           {!stockLedgerEnabled ? (
             <Notice kind="warning">
-              El libro mayor está integrado, pero los conteos y reservas se habilitan después de
-              conciliar las existencias actuales.
+              El servidor aún no habilita los conteos de inventario. Actualiza la API para capturar
+              existencias y movimientos desde esta pantalla.
             </Notice>
           ) : null}
           <Metric
@@ -234,19 +302,28 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               ),
             )}
           />
+          <Field
+            label="Buscar ingrediente"
+            value={businessSearch}
+            onChangeText={setBusinessSearch}
+          />
           {data.ingredients.length === 0 ? (
             <Notice>
               Agrega ingredientes en gramos, mililitros o piezas. Incluye empaques y consumibles en
               las recetas.
             </Notice>
           ) : (
-            data.ingredients.map((ingredient) => (
+            visibleIngredients.map((ingredient) => (
               <Card key={ingredient.id}>
                 <Text style={shared.text}>
                   {ingredient.name}
-                  {numberValue(ingredient.stock) <= numberValue(ingredient.minimum)
-                    ? ' · Bajo mínimo'
-                    : ''}
+                  {numberValue(ingredient.stock) < 0
+                    ? ' · Negativo, pendiente de conteo'
+                    : numberValue(ingredient.stock) === 0
+                      ? ' · Sin existencias'
+                      : numberValue(ingredient.stock) <= numberValue(ingredient.minimum)
+                        ? ' · Bajo mínimo'
+                        : ''}
                 </Text>
                 <Text style={shared.subtitle}>
                   {quantity(ingredient.stock)} {ingredient.unit} · mínimo{' '}
@@ -270,7 +347,15 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
             El precio sugerido usa tu margen objetivo. Se basa en el promedio ponderado de
             existencias y en el último costo cuando el ingrediente está agotado.
           </Text>
-          {data.products.map((product) => (
+          <Field
+            label="Buscar producto o receta"
+            value={businessSearch}
+            onChangeText={setBusinessSearch}
+          />
+          {visibleProducts.length === 0 ? (
+            <Text style={shared.subtitle}>No hay productos que coincidan con la búsqueda.</Text>
+          ) : null}
+          {visibleProducts.map((product) => (
             <Card key={product.id}>
               <Text style={shared.text}>{product.name}</Text>
               <Text style={shared.subtitle}>
@@ -280,7 +365,11 @@ export function BusinessPage({ section }: { section: BusinessSection }) {
               </Text>
               <Text style={styles.price}>Lista {money(product.price_cents)}</Text>
               <Button
-                label="Editar receta y precio"
+                label={
+                  data.recipes.some((line) => line.product_id === product.id)
+                    ? 'Editar receta y precio'
+                    : 'Crear receta'
+                }
                 secondary
                 onPress={() => openEditor('recipe', product.id)}
               />
@@ -341,14 +430,40 @@ function EntryCard({ entry }: { entry: BusinessState['entries'][number] }) {
   );
 }
 
-type Line = { id: string; name: string; quantity: number; totalCents?: number };
+type Line = {
+  id: string;
+  name: string;
+  quantity: number;
+  kind?: 'ingredient' | 'modifier';
+  ingredientId?: string;
+  modifierId?: string;
+  removable?: boolean;
+  extra?: boolean;
+  inventoryName?: string;
+  totalCents?: number;
+  multiplicity?: number;
+  suggestedQuantity?: number;
+};
 export function BusinessEditor({ mode, productId }: { mode: BusinessMode; productId?: string }) {
   const range = useMemo(dayWindow, []);
   const { data, isLoading, error } = useBusiness(range);
+  const catalog = useQuery({
+    queryKey: ['catalog'],
+    queryFn: () => api.catalog(),
+    enabled: mode === 'recipe' && Boolean(productId),
+  });
   const capabilities = useQuery({
     queryKey: ['capabilities'],
     queryFn: () => api.capabilities(),
     staleTime: 60_000,
+  });
+  const recipeVersionsEnabled = capabilities.data?.some(
+    (capability) => capability.key === 'recipe_versions' && capability.enabled,
+  );
+  const recipeVersions = useQuery({
+    queryKey: ['recipe-versions', productId],
+    queryFn: () => api.recipeVersions(productId),
+    enabled: mode === 'recipe' && Boolean(productId) && recipeVersionsEnabled === true,
   });
   const client = useQueryClient();
   const [description, setDescription] = useState('');
@@ -361,6 +476,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [neighborhood, setNeighborhood] = useState('');
   const [streetAndNumber, setStreetAndNumber] = useState('');
   const [selectedId, setSelectedId] = useState('');
+  const [lineSearch, setLineSearch] = useState('');
+  const [showAllChoices, setShowAllChoices] = useState(false);
   const [lineQuantity, setLineQuantity] = useState('');
   const [lineTotal, setLineTotal] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
@@ -368,32 +485,122 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const [overhead, setOverhead] = useState('0');
   const [price, setPrice] = useState('');
   const [pending, setPending] = useState<Record<string, unknown>>();
+  const [pendingAmbiguous, setPendingAmbiguous] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const product = data?.products.find((item) => item.id === productId);
-  const recipeVersionsEnabled = capabilities.data?.some(
-    (capability) => capability.key === 'recipe_versions' && capability.enabled,
+  const activeRecipeVersion = recipeVersions.data?.versions.find(
+    (version) => version.product_id === productId && version.status === 'active',
+  );
+  const hasExistingRecipe = Boolean(
+    product &&
+    (activeRecipeVersion || data?.recipes.some((line) => line.product_id === product.id)),
+  );
+  const menuProduct = catalog.data?.products.find((candidate) => candidate.id === product?.id);
+  const recipeTemplate = useMemo(
+    () =>
+      data && menuProduct
+        ? recipeTemplateForProduct(menuProduct, data.ingredients, catalog.data?.modifiers ?? [])
+        : undefined,
+    [catalog.data?.modifiers, data, menuProduct],
   );
   const unifiedOrdersEnabled = capabilities.data?.some(
     (capability) => capability.key === 'unified_orders' && capability.enabled,
   );
+  const quoteReady =
+    mode === 'sale' &&
+    unifiedOrdersEnabled === true &&
+    Boolean(pending && 'quotedTotalCents' in pending) &&
+    !pendingAmbiguous;
+  const formLocked = busy || pendingAmbiguous || quoteReady;
   useEffect(() => {
     if (mode !== 'recipe' || !data || !product || lines.length) return;
+    if (recipeVersionsEnabled === undefined) return;
+    if (recipeVersionsEnabled && (recipeVersions.isLoading || recipeVersions.isError)) return;
     setTargetMargin(String(product.target_margin ?? 65));
     setOverhead(String((product.overhead_cents ?? 0) / 100));
     setPrice(String(product.price_cents / 100));
-    setLines(
-      data.recipes
-        .filter((line) => line.product_id === product.id)
-        .map((line) => ({
-          id: line.ingredient_id,
-          name:
-            data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
-            line.ingredient_id,
-          quantity: numberValue(line.quantity),
-        })),
-    );
-  }, [data, lines.length, mode, product]);
+    const savedComponents = recipeVersionsEnabled
+      ? (recipeVersions.data?.components.filter(
+          (component) => component.recipe_version_id === activeRecipeVersion?.id,
+        ) ?? [])
+      : [];
+    const savedLines = recipeVersionsEnabled
+      ? savedComponents
+          .filter((component) => component.ingredient_id && component.component_kind !== 'modifier')
+          .map((component) => ({
+            id: component.ingredient_id!,
+            name: component.component_name,
+            quantity: numberValue(component.quantity),
+            kind: 'ingredient' as const,
+            ingredientId: component.ingredient_id!,
+            removable: component.removable,
+          }))
+      : data.recipes
+          .filter((line) => line.product_id === product.id)
+          .map((line) => ({
+            id: line.ingredient_id,
+            name:
+              data.ingredients.find((ingredient) => ingredient.id === line.ingredient_id)?.name ??
+              line.ingredient_id,
+            quantity: numberValue(line.quantity),
+            kind: 'ingredient' as const,
+          }));
+    const savedExtras = recipeVersionsEnabled
+      ? savedComponents
+          .filter(
+            (component) =>
+              component.component_kind === 'modifier' &&
+              component.modifier_id &&
+              component.ingredient_id,
+          )
+          .map((component) => ({
+            id: `modifier:${component.modifier_id}`,
+            name: component.component_name,
+            quantity: numberValue(component.quantity),
+            kind: 'modifier' as const,
+            modifierId: component.modifier_id!,
+            ingredientId: component.ingredient_id!,
+            inventoryName:
+              data.ingredients.find((ingredient) => ingredient.id === component.ingredient_id)
+                ?.name ?? component.ingredient_id!,
+            extra: true,
+          }))
+      : [];
+    if (!recipeTemplate) {
+      if (savedLines.length) setLines(savedLines);
+      return;
+    }
+    const savedById = new Map(savedLines.map((line) => [line.id, line]));
+    const menuLines = recipeTemplate.lines.map((ingredient) => ({
+      ...ingredient,
+      quantity: savedById.get(ingredient.id)?.quantity ?? ingredient.suggestedQuantity ?? 0,
+    }));
+    const savedExtrasById = new Map(savedExtras.map((line) => [line.modifierId, line]));
+    const menuExtras = recipeTemplate.extras.map((extra) => ({
+      ...extra,
+      quantity: savedExtrasById.get(extra.modifierId)?.quantity ?? extra.suggestedQuantity ?? 0,
+    }));
+    const menuIds = new Set(menuLines.map((line) => line.id));
+    const extraIds = new Set(menuExtras.map((line) => line.modifierId));
+    setLines([
+      ...menuLines,
+      ...savedLines.filter((line) => !menuIds.has(line.id)),
+      ...menuExtras,
+      ...savedExtras.filter((line) => !extraIds.has(line.modifierId!)),
+    ]);
+  }, [
+    activeRecipeVersion?.id,
+    data,
+    lines.length,
+    mode,
+    product,
+    recipeTemplate,
+    recipeVersions.data,
+    recipeVersions.isError,
+    recipeVersions.isLoading,
+    recipeVersionsEnabled,
+  ]);
   if (isLoading) return <Loading />;
   if (!data)
     return (
@@ -405,12 +612,17 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
     );
   const source = mode === 'sale' ? data.products : data.ingredients;
   const selected = source.find((item) => item.id === selectedId);
+  const filteredSource = source.filter((item) =>
+    item.name.toLocaleLowerCase('es-MX').includes(lineSearch.trim().toLocaleLowerCase('es-MX')),
+  );
+  const visibleSource =
+    lineSearch.trim() || showAllChoices ? filteredSource : filteredSource.slice(0, 8);
   const requiresLines =
     mode === 'purchase' || mode === 'sale' || mode === 'recipe' || mode === 'count';
   const addLine = () => {
     setMessage(undefined);
     const quantityValue = Number(lineQuantity.replace(',', '.'));
-    if (!selected || !Number.isFinite(quantityValue) || quantityValue <= 0) {
+    if (!selected || !Number.isFinite(quantityValue) || (mode !== 'count' && quantityValue <= 0)) {
       setMessage('Selecciona un artículo y escribe una cantidad válida.');
       return;
     }
@@ -449,8 +661,31 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
       return { name: description.trim(), unit, minimum: Number(minimum.replace(',', '.')) || 0 };
     }
     if (mode === 'recipe') {
+      if (!recipeVersionsEnabled) {
+        setMessage(
+          'El servidor debe habilitar versiones de recetas antes de guardar una receta POS.',
+        );
+        return;
+      }
       if (!product || !lines.length) {
-        setMessage('Agrega al menos un ingrediente a la receta.');
+        setMessage('No se encontraron ingredientes para esta receta.');
+        return;
+      }
+      if (recipeTemplate?.missingNames.length) {
+        setMessage(
+          `Registra primero estos ingredientes: ${recipeTemplate.missingNames.join(', ')}.`,
+        );
+        return;
+      }
+      const incomplete = lines.filter(
+        (line) =>
+          (!line.extra && (!Number.isFinite(line.quantity) || line.quantity <= 0)) ||
+          (line.extra && (!Number.isFinite(line.quantity) || line.quantity < 0)),
+      );
+      if (incomplete.length) {
+        setMessage(
+          `Completa las cantidades base y corrige los extras negativos: ${incomplete.map((line) => line.name).join(', ')}.`,
+        );
         return;
       }
       return {
@@ -458,7 +693,16 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         targetMargin: Math.round(Number(targetMargin) || 0),
         overheadCents: centsFromInput(overhead),
         priceCents: centsFromInput(price),
-        lines: lines.map((line) => ({ ingredientId: line.id, quantity: line.quantity })),
+        components: lines
+          .filter((line) => line.quantity > 0)
+          .map((line) => ({
+            kind: line.kind ?? 'ingredient',
+            ingredientId: line.ingredientId ?? (line.kind === 'modifier' ? undefined : line.id),
+            modifierId: line.modifierId,
+            quantity: line.quantity,
+            removable: line.removable ?? false,
+            extra: line.extra ?? false,
+          })),
         idempotencyKey: createIdempotencyKey(),
       };
     }
@@ -577,6 +821,8 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const save = async () => {
     const input = pending ?? build();
     if (!input) return;
+    const requestingQuote =
+      mode === 'sale' && unifiedOrdersEnabled === true && !('quotedTotalCents' in input);
     setPending(input);
     setBusy(true);
     setMessage(undefined);
@@ -586,23 +832,32 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
           input as { name: string; unit: 'g' | 'ml' | 'pz'; minimum: number },
         );
       else if (mode === 'recipe') {
-        if (recipeVersionsEnabled)
-          await api.createRecipeVersion({
-            idempotencyKey: input.idempotencyKey as string,
-            productId: input.productId as string,
-            targetMargin: input.targetMargin as number,
-            overheadCents: input.overheadCents as number,
-            components: (input.lines as Array<{ ingredientId: string; quantity: number }>).map(
-              (line) => ({
-                kind: 'ingredient' as const,
-                ingredientId: line.ingredientId,
-                quantity: line.quantity.toFixed(3),
-                removable: false,
-                extra: false,
-              }),
-            ),
-          });
-        else await api.saveRecipe(input as never);
+        if (!recipeVersionsEnabled)
+          throw new Error('El servidor no habilita recetas POS completas.');
+        await api.createRecipeVersion({
+          idempotencyKey: input.idempotencyKey as string,
+          productId: input.productId as string,
+          targetMargin: input.targetMargin as number,
+          overheadCents: input.overheadCents as number,
+          priceCents: input.priceCents as number,
+          components: (
+            input.components as Array<{
+              kind: 'ingredient' | 'modifier';
+              ingredientId?: string;
+              modifierId?: string;
+              quantity: number;
+              removable: boolean;
+              extra: boolean;
+            }>
+          ).map((component) => ({
+            kind: component.kind,
+            ...(component.ingredientId ? { ingredientId: component.ingredientId } : {}),
+            ...(component.modifierId ? { modifierId: component.modifierId } : {}),
+            quantity: component.quantity.toFixed(3),
+            removable: component.removable,
+            extra: component.extra,
+          })),
+        });
       } else if (mode === 'production') {
         await api.createProductionBatch(input as never);
       } else if (mode === 'count') await api.countStock(input as never);
@@ -626,9 +881,16 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         return;
       } else await api.recordBusinessEntry(input);
       await client.invalidateQueries({ queryKey: ['business'] });
+      await client.invalidateQueries({ queryKey: ['recipe-versions', productId] });
       router.back();
     } catch (cause) {
-      if (cause instanceof BjApiError && !cause.ambiguous) setPending(undefined);
+      const ambiguous = !(cause instanceof BjApiError) || cause.ambiguous;
+      if (requestingQuote || !ambiguous) {
+        setPending(undefined);
+        setPendingAmbiguous(false);
+      } else {
+        setPendingAmbiguous(true);
+      }
       setMessage(
         cause instanceof BjApiError
           ? cause.message
@@ -641,291 +903,454 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
   const heading = {
     ingredient: 'Nuevo ingrediente',
     purchase: 'Registrar compra',
-    sale: 'Cobrar venta',
+    sale: 'Registrar venta',
     waste: 'Registrar merma',
     count: 'Registrar conteo',
     expense: 'Registrar gasto',
-    recipe: `Receta · ${product?.name ?? ''}`,
+    recipe: `${hasExistingRecipe ? 'Editar receta' : 'Crear receta'} · ${product?.name ?? ''}`,
     production: `Lote · ${product?.name ?? ''}`,
   }[mode];
   return (
     <ScrollScreen>
       <SectionTitle title={heading} />
-      <Text style={shared.subtitle}>
-        {mode === 'sale'
-          ? unifiedOrdersEnabled
-            ? 'Primero cotiza en el servidor y confirma la misma solicitud. La comanda reserva existencias; el cobro se registra en Caja.'
-            : 'El servidor confirma el precio y descuenta el inventario. Una respuesta incierta conserva esta misma operación para reintentarla.'
-          : mode === 'recipe'
-            ? 'El costo y precio sugerido se actualizarán usando las compras registradas.'
-            : mode === 'production'
-              ? 'El servidor consumirá los insumos de la receta activa y registrará el costo del lote.'
-              : ''}
-      </Text>
-      {mode === 'ingredient' ? (
-        <>
-          <Field label="Nombre" value={description} onChangeText={setDescription} />
-          <Text style={shared.label}>Unidad base</Text>
-          <View style={styles.row}>
-            {(['g', 'ml', 'pz'] as const).map((value) => (
-              <Pill
-                key={value}
-                label={
-                  value === 'g' ? 'Gramos (g)' : value === 'ml' ? 'Mililitros (ml)' : 'Piezas (pz)'
-                }
-                selected={unit === value}
-                onPress={() => setUnit(value)}
-              />
-            ))}
-          </View>
-          <Field
-            label="Existencia mínima"
-            keyboardType="decimal-pad"
-            value={minimum}
-            onChangeText={setMinimum}
-          />
-        </>
-      ) : null}
-      {mode !== 'ingredient' && mode !== 'recipe' ? (
-        <Field
-          label={
-            mode === 'purchase'
-              ? 'Proveedor / folio de compra'
-              : mode === 'sale'
-                ? 'Cliente o referencia de venta'
-                : mode === 'expense'
-                  ? 'Descripción del gasto'
-                  : mode === 'count'
-                    ? 'Motivo del conteo'
-                    : mode === 'production'
-                      ? 'Motivo o referencia del lote'
-                      : 'Motivo de la merma'
-          }
-          value={description}
-          onChangeText={(value) => {
-            setDescription(value);
-          }}
-        />
-      ) : null}
-      {mode === 'sale' && !unifiedOrdersEnabled ? (
-        <>
-          <Text style={shared.label}>Forma de pago</Text>
-          <View style={styles.row}>
-            {(
-              [
-                ['cash', 'Efectivo'],
-                ['card', 'Tarjeta'],
-                ['transfer', 'Transferencia'],
-              ] as const
-            ).map(([value, label]) => (
-              <Pill
-                key={value}
-                label={label}
-                selected={payment === value}
-                onPress={() => setPayment(value)}
-              />
-            ))}
-          </View>
-        </>
-      ) : null}
-      {mode === 'sale' && unifiedOrdersEnabled ? (
-        <>
-          <Text style={shared.label}>Modalidad</Text>
-          <View style={styles.row}>
-            {(
-              [
-                ['counter', 'Mostrador'],
-                ['pickup', 'Recoger'],
-                ['delivery', 'Domicilio'],
-              ] as const
-            ).map(([value, label]) => (
-              <Pill
-                key={value}
-                label={label}
-                selected={fulfillment === value}
-                onPress={() => {
-                  setFulfillment(value);
-                }}
-              />
-            ))}
-          </View>
-          {fulfillment === 'delivery' ? (
-            <>
-              <Field
-                label="Colonia"
-                value={neighborhood}
-                onChangeText={(value) => {
-                  setNeighborhood(value);
-                }}
-              />
-              <Field
-                label="Dirección"
-                value={streetAndNumber}
-                onChangeText={(value) => {
-                  setStreetAndNumber(value);
-                }}
-              />
-            </>
-          ) : null}
-          <Field
-            label="Descuento manual (MXN)"
-            keyboardType="decimal-pad"
-            value={manualDiscount}
-            onChangeText={(value) => {
-              setManualDiscount(value);
-            }}
-          />
-          <Field
-            label="Motivo del descuento"
-            value={manualDiscountReason}
-            onChangeText={(value) => {
-              setManualDiscountReason(value);
-            }}
-          />
-        </>
-      ) : null}
-      {mode === 'recipe' ? (
-        <>
-          {recipeVersionsEnabled ? (
+      <View pointerEvents={formLocked ? 'none' : 'auto'}>
+        {mode === 'recipe' && !hasExistingRecipe ? (
+          <>
             <Notice>
-              La receta se guardará como una nueva versión. El precio de lista no se cambia desde
-              esta operación.
+              Los ingredientes del menú se cargan como plantilla con cantidad cero. Completa las
+              porciones reales antes de guardar; el costo no se estima con cantidades inventadas.
             </Notice>
-          ) : null}
-          <Field
-            label="Margen objetivo (%)"
-            keyboardType="number-pad"
-            value={targetMargin}
-            onChangeText={setTargetMargin}
-          />
-          <Field
-            label="Empaque u otros costos por producto (MXN)"
-            keyboardType="decimal-pad"
-            value={overhead}
-            onChangeText={setOverhead}
-          />
-          <Field
-            label="Precio de lista (MXN)"
-            keyboardType="decimal-pad"
-            value={price}
-            onChangeText={setPrice}
-          />
-        </>
-      ) : null}
-      {mode === 'production' ? (
-        <>
-          <Field
-            label="Rendimiento real"
-            keyboardType="decimal-pad"
-            value={lineQuantity}
-            onChangeText={setLineQuantity}
-          />
-          <Text style={shared.label}>Unidad de la preparación</Text>
-          <View style={styles.row}>
-            {(['g', 'ml', 'pz'] as const).map((value) => (
-              <Pill
-                key={value}
-                label={value}
-                selected={unit === value}
-                onPress={() => setUnit(value)}
-              />
-            ))}
-          </View>
-        </>
-      ) : null}
-      {mode === 'expense' ? (
-        <Field
-          label="Importe (MXN)"
-          keyboardType="decimal-pad"
-          value={lineTotal}
-          onChangeText={setLineTotal}
-        />
-      ) : null}
-      {mode === 'count' ? (
-        <Field
-          label="Costo unitario para sobrante, si aplica (MXN)"
-          keyboardType="decimal-pad"
-          value={lineTotal}
-          onChangeText={setLineTotal}
-        />
-      ) : null}
-      {requiresLines || mode === 'waste' ? (
-        <Card>
-          <Text style={shared.text}>{mode === 'sale' ? 'Productos' : 'Ingredientes'}</Text>
-          <ScrollView horizontal contentContainerStyle={styles.row}>
-            {source.map((item) => (
-              <Pill
-                key={item.id}
-                label={item.name}
-                selected={selectedId === item.id}
-                onPress={() => setSelectedId(item.id)}
-              />
-            ))}
-          </ScrollView>
-          <Field
-            label={mode === 'sale' ? 'Cantidad de productos' : 'Cantidad en unidad base'}
-            keyboardType="decimal-pad"
-            value={lineQuantity}
-            onChangeText={setLineQuantity}
-          />
-          {mode === 'purchase' ? (
-            <Field
-              label="Total pagado por este ingrediente (MXN)"
-              keyboardType="decimal-pad"
-              value={lineTotal}
-              onChangeText={setLineTotal}
-            />
-          ) : null}
-          {requiresLines ? (
-            <Button
-              label="Agregar línea"
-              secondary
-              disabled={mode === 'sale' && Boolean(pending)}
-              onPress={addLine}
-            />
-          ) : null}
-          {lines.map((line) => (
-            <View key={line.id} style={styles.line}>
-              <Text style={shared.text}>
-                {line.name} · {quantity(line.quantity)}{' '}
-                {mode === 'sale'
-                  ? 'pz'
-                  : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
-                {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
-              </Text>
-              <Button
-                label="Quitar"
-                secondary
-                disabled={mode === 'sale' && Boolean(pending)}
-                onPress={() => {
-                  setLines((current) => current.filter((item) => item.id !== line.id));
-                }}
-              />
+          </>
+        ) : null}
+        {mode === 'recipe' ? (
+          <>
+            {recipeTemplate?.missingNames.length ? (
+              <Notice kind="error">
+                Faltan en inventario: {recipeTemplate.missingNames.join(', ')}. Registra esos
+                ingredientes antes de completar la receta.
+              </Notice>
+            ) : recipeTemplate ? (
+              <Notice>
+                {recipeTemplate.lines.length} ingredientes base. Captura cantidades por producto;
+                cada extra puede quedar en cero hasta definir su porción física.
+              </Notice>
+            ) : catalog.isLoading ? (
+              <Notice>Buscando ingredientes del menú…</Notice>
+            ) : (
+              <Notice kind="error">No se pudo cargar la plantilla de ingredientes del menú.</Notice>
+            )}
+            {recipeVersionsEnabled && recipeVersions.isError ? (
+              <Notice kind="error">No se pudo leer la versión activa de esta receta.</Notice>
+            ) : null}
+          </>
+        ) : null}
+        <Text style={shared.subtitle}>
+          {mode === 'sale'
+            ? unifiedOrdersEnabled
+              ? 'Primero cotiza en el servidor y confirma la misma solicitud. La comanda reserva existencias; el cobro se registra en Caja.'
+              : 'El servidor confirma el precio y descuenta el inventario. Una respuesta incierta conserva esta misma operación para reintentarla.'
+            : mode === 'recipe'
+              ? 'El costo y precio sugerido se actualizarán usando las compras registradas.'
+              : mode === 'production'
+                ? 'El servidor consumirá los insumos de la receta activa y registrará el costo del lote.'
+                : ''}
+        </Text>
+        {mode === 'ingredient' ? (
+          <>
+            <Field label="Nombre" value={description} onChangeText={setDescription} />
+            <Text style={shared.label}>Unidad base</Text>
+            <View style={styles.row}>
+              {(['g', 'ml', 'pz'] as const).map((value) => (
+                <Pill
+                  key={value}
+                  label={
+                    value === 'g'
+                      ? 'Gramos (g)'
+                      : value === 'ml'
+                        ? 'Mililitros (ml)'
+                        : 'Piezas (pz)'
+                  }
+                  selected={unit === value}
+                  onPress={() => setUnit(value)}
+                />
+              ))}
             </View>
-          ))}
-        </Card>
-      ) : null}
-      {mode === 'sale' && lines.length ? (
-        <Metric
-          label="Total a cobrar"
-          value={money(
-            lines.reduce(
-              (sum, line) =>
-                sum +
-                (data.products.find((item) => item.id === line.id)?.price_cents ?? 0) *
-                  line.quantity,
-              0,
-            ),
-          )}
-        />
-      ) : null}
+            <Field
+              label="Existencia mínima"
+              keyboardType="decimal-pad"
+              value={minimum}
+              onChangeText={setMinimum}
+            />
+          </>
+        ) : null}
+        {mode !== 'ingredient' && mode !== 'recipe' ? (
+          <Field
+            label={
+              mode === 'purchase'
+                ? 'Proveedor / folio de compra'
+                : mode === 'sale'
+                  ? 'Cliente o referencia de venta'
+                  : mode === 'expense'
+                    ? 'Descripción del gasto'
+                    : mode === 'count'
+                      ? 'Motivo del conteo'
+                      : mode === 'production'
+                        ? 'Motivo o referencia del lote'
+                        : 'Motivo de la merma'
+            }
+            value={description}
+            onChangeText={(value) => {
+              setDescription(value);
+            }}
+          />
+        ) : null}
+        {mode === 'sale' && !unifiedOrdersEnabled ? (
+          <>
+            <Text style={shared.label}>Forma de pago</Text>
+            <View style={styles.row}>
+              {(
+                [
+                  ['cash', 'Efectivo'],
+                  ['card', 'Tarjeta'],
+                  ['transfer', 'Transferencia'],
+                ] as const
+              ).map(([value, label]) => (
+                <Pill
+                  key={value}
+                  label={label}
+                  selected={payment === value}
+                  onPress={() => setPayment(value)}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
+        {mode === 'sale' && unifiedOrdersEnabled ? (
+          <>
+            <Text style={shared.label}>Modalidad</Text>
+            <View style={styles.row}>
+              {(
+                [
+                  ['counter', 'Mostrador'],
+                  ['pickup', 'Recoger'],
+                  ['delivery', 'Domicilio'],
+                ] as const
+              ).map(([value, label]) => (
+                <Pill
+                  key={value}
+                  label={label}
+                  selected={fulfillment === value}
+                  onPress={() => {
+                    setFulfillment(value);
+                  }}
+                />
+              ))}
+            </View>
+            {fulfillment === 'delivery' ? (
+              <>
+                <Field
+                  label="Colonia"
+                  value={neighborhood}
+                  onChangeText={(value) => {
+                    setNeighborhood(value);
+                  }}
+                />
+                <Field
+                  label="Dirección"
+                  value={streetAndNumber}
+                  onChangeText={(value) => {
+                    setStreetAndNumber(value);
+                  }}
+                />
+              </>
+            ) : null}
+            <Field
+              label="Descuento manual (MXN)"
+              keyboardType="decimal-pad"
+              value={manualDiscount}
+              onChangeText={(value) => {
+                setManualDiscount(value);
+              }}
+            />
+            <Field
+              label="Motivo del descuento"
+              value={manualDiscountReason}
+              onChangeText={(value) => {
+                setManualDiscountReason(value);
+              }}
+            />
+          </>
+        ) : null}
+        {mode === 'recipe' ? (
+          <>
+            {recipeVersionsEnabled ? (
+              <Notice>
+                La receta se guardará como una nueva versión y actualizará el costo y el precio de
+                lista del producto.
+              </Notice>
+            ) : (
+              <Notice kind="warning">
+                El servidor todavía no habilita el versionado de recetas. No guardes datos de costo
+                hasta actualizar la API.
+              </Notice>
+            )}
+            <Field
+              label="Margen objetivo (%)"
+              keyboardType="number-pad"
+              value={targetMargin}
+              onChangeText={setTargetMargin}
+            />
+            <Field
+              label="Empaque u otros costos por producto (MXN)"
+              keyboardType="decimal-pad"
+              value={overhead}
+              onChangeText={setOverhead}
+            />
+            <Field
+              label="Precio de lista (MXN)"
+              keyboardType="decimal-pad"
+              value={price}
+              onChangeText={setPrice}
+            />
+          </>
+        ) : null}
+        {mode === 'production' ? (
+          <>
+            <Field
+              label="Rendimiento real"
+              keyboardType="decimal-pad"
+              value={lineQuantity}
+              onChangeText={setLineQuantity}
+            />
+            <Text style={shared.label}>Unidad de la preparación</Text>
+            <View style={styles.row}>
+              {(['g', 'ml', 'pz'] as const).map((value) => (
+                <Pill
+                  key={value}
+                  label={value}
+                  selected={unit === value}
+                  onPress={() => setUnit(value)}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
+        {mode === 'expense' ? (
+          <Field
+            label="Importe (MXN)"
+            keyboardType="decimal-pad"
+            value={lineTotal}
+            onChangeText={setLineTotal}
+          />
+        ) : null}
+        {mode === 'count' ? (
+          <Field
+            label="Costo unitario para sobrante, si aplica (MXN)"
+            keyboardType="decimal-pad"
+            value={lineTotal}
+            onChangeText={setLineTotal}
+          />
+        ) : null}
+        {requiresLines || mode === 'waste' ? (
+          <Card>
+            <Text style={shared.text}>
+              {mode === 'recipe'
+                ? 'Ingredientes base'
+                : mode === 'sale'
+                  ? 'Productos'
+                  : 'Ingredientes'}
+            </Text>
+            {mode === 'recipe' ? (
+              <>
+                {lines
+                  .filter((line) => !line.extra)
+                  .map((line) => (
+                    <View key={line.id} style={styles.recipeLine}>
+                      <Text style={[shared.text, styles.recipeLineName]}>
+                        {line.name}
+                        {line.multiplicity !== undefined && line.multiplicity !== 1
+                          ? ` ×${line.multiplicity}`
+                          : ''}
+                        {' · '}
+                        {data.ingredients.find((item) => item.id === (line.ingredientId ?? line.id))
+                          ?.unit ?? ''}
+                        {line.removable ? ' · se puede retirar' : ''}
+                      </Text>
+                      <TextInput
+                        accessibilityLabel={`Cantidad por producto de ${line.name}`}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={colors.muted}
+                        value={line.quantity > 0 ? String(line.quantity) : ''}
+                        onChangeText={(value) => {
+                          const parsed = Number(value.replace(',', '.'));
+                          setLines((current) =>
+                            current.map((item) =>
+                              item.id === line.id
+                                ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
+                                : item,
+                            ),
+                          );
+                        }}
+                        style={styles.recipeQuantity}
+                      />
+                    </View>
+                  ))}
+                <Text style={shared.label}>Extras opcionales que consumen inventario</Text>
+                {lines
+                  .filter((line) => line.extra)
+                  .map((line) => (
+                    <View key={line.id} style={styles.recipeLine}>
+                      <Text style={[shared.text, styles.recipeLineName]}>
+                        {line.name} ·{' '}
+                        {line.inventoryName ??
+                          data.ingredients.find((item) => item.id === line.ingredientId)?.name ??
+                          ''}
+                      </Text>
+                      <TextInput
+                        accessibilityLabel={`Cantidad del extra ${line.name}`}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={colors.muted}
+                        value={line.quantity > 0 ? String(line.quantity) : ''}
+                        onChangeText={(value) => {
+                          const parsed = Number(value.replace(',', '.'));
+                          setLines((current) =>
+                            current.map((item) =>
+                              item.id === line.id
+                                ? { ...item, quantity: Number.isFinite(parsed) ? parsed : 0 }
+                                : item,
+                            ),
+                          );
+                        }}
+                        style={styles.recipeQuantity}
+                      />
+                      <Text style={shared.subtitle}>
+                        {data.ingredients.find((item) => item.id === line.ingredientId)?.unit ?? ''}
+                      </Text>
+                    </View>
+                  ))}
+              </>
+            ) : (
+              <>
+                <Field
+                  label={mode === 'sale' ? 'Buscar producto' : 'Buscar ingrediente'}
+                  value={lineSearch}
+                  onChangeText={(value) => {
+                    setLineSearch(value);
+                    setShowAllChoices(false);
+                  }}
+                />
+                <View style={styles.row}>
+                  {visibleSource.map((item) => (
+                    <Pill
+                      key={item.id}
+                      label={item.name}
+                      selected={selectedId === item.id}
+                      onPress={() => setSelectedId(item.id)}
+                    />
+                  ))}
+                </View>
+                {!lineSearch.trim() && filteredSource.length > 8 ? (
+                  <Button
+                    label={
+                      showAllChoices ? 'Mostrar menos' : `Ver todos (${filteredSource.length})`
+                    }
+                    secondary
+                    onPress={() => setShowAllChoices((current) => !current)}
+                  />
+                ) : null}
+                <Field
+                  label={
+                    mode === 'sale'
+                      ? 'Cantidad de productos'
+                      : mode === 'count'
+                        ? 'Existencia contada (puede ser negativa)'
+                        : 'Cantidad en unidad base'
+                  }
+                  keyboardType={mode === 'count' ? 'default' : 'decimal-pad'}
+                  value={lineQuantity}
+                  onChangeText={setLineQuantity}
+                />
+                {mode === 'purchase' ? (
+                  <Field
+                    label="Total pagado por este ingrediente (MXN)"
+                    keyboardType="decimal-pad"
+                    value={lineTotal}
+                    onChangeText={setLineTotal}
+                  />
+                ) : null}
+                {requiresLines ? (
+                  <Button
+                    label="Agregar línea"
+                    secondary
+                    disabled={mode === 'sale' && Boolean(pending)}
+                    onPress={addLine}
+                  />
+                ) : null}
+                {lines.map((line) => (
+                  <View key={line.id} style={styles.line}>
+                    <Text style={shared.text}>
+                      {line.name} · {quantity(line.quantity)}{' '}
+                      {mode === 'sale'
+                        ? 'pz'
+                        : (data.ingredients.find((item) => item.id === line.id)?.unit ?? '')}
+                      {line.totalCents !== undefined ? ` · ${money(line.totalCents)}` : ''}
+                    </Text>
+                    <Button
+                      label="Quitar"
+                      secondary
+                      disabled={mode === 'sale' && Boolean(pending)}
+                      onPress={() =>
+                        setLines((current) => current.filter((item) => item.id !== line.id))
+                      }
+                    />
+                  </View>
+                ))}
+              </>
+            )}
+          </Card>
+        ) : null}{' '}
+        {mode === 'sale' && lines.length ? (
+          <Metric
+            label="Total a cobrar"
+            value={money(
+              lines.reduce(
+                (sum, line) =>
+                  sum +
+                  (data.products.find((item) => item.id === line.id)?.price_cents ?? 0) *
+                    line.quantity,
+                0,
+              ),
+            )}
+          />
+        ) : null}
+      </View>
       {message ? (
         <Notice kind={message.startsWith('Cotización') ? 'info' : 'error'}>{message}</Notice>
       ) : null}
-      {pending && !busy ? (
+      {pendingAmbiguous ? (
         <Notice kind="warning">
-          La respuesta no se confirmó. Reintenta esta misma operación para no duplicarla.
+          La respuesta pudo perderse después de guardar. Reintenta esta misma operación; los datos
+          quedaron bloqueados para evitar duplicarla.
         </Notice>
+      ) : quoteReady ? (
+        <>
+          <Notice kind="warning">
+            Cotización del servidor: {money(Number(pending?.quotedTotalCents))}. Confirma esta
+            cotización o edita el pedido y vuelve a cotizar.
+          </Notice>
+          <Button
+            label="Editar pedido y volver a cotizar"
+            secondary
+            onPress={() => {
+              setPending(undefined);
+              setMessage(undefined);
+            }}
+          />
+        </>
+      ) : pending && !busy ? (
+        <Notice kind="warning">Reintenta esta misma operación para evitar duplicarla.</Notice>
       ) : null}
       <Button
         label={
@@ -941,7 +1366,7 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
                     : 'Confirmar cobro y descontar inventario'
                   : 'Guardar'
         }
-        disabled={busy}
+        disabled={busy || (mode === 'recipe' && recipeVersionsEnabled !== true)}
         onPress={() => void save()}
       />
     </ScrollScreen>
@@ -957,4 +1382,18 @@ const styles = StyleSheet.create({
   actions: { gap: 8 },
   price: { color: colors.gold, fontSize: 18, fontWeight: '800' },
   line: { gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  recipeLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  recipeLineName: { flex: 1 },
+  recipeQuantity: {
+    width: 92,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    color: colors.text,
+    backgroundColor: '#101510',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 16,
+    textAlign: 'right',
+  },
 });
