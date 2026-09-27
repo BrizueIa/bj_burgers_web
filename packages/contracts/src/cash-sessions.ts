@@ -28,6 +28,8 @@ export const cashSessionSchema = z.object({
 });
 export const cashSessionStateSchema = z.object({
   session: cashSessionSchema.nullable(),
+  lastClosedSession: cashSessionSchema.nullable().default(null),
+  recentClosings: z.array(cashSessionSchema).default([]),
   movements: z.array(
     z.object({
       id: z.uuid(),

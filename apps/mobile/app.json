@@ -2,19 +2,26 @@
   "expo": {
     "name": "B&J Operación",
     "slug": "bj-operacion",
-    "version": "1.0.2",
+    "version": "1.1.4",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "scheme": "bjoperacion",
     "android": {
       "package": "com.bjburgers.operacion",
-      "versionCode": 3,
+      "versionCode": 15,
       "adaptiveIcon": {
         "backgroundColor": "#0a0d0b"
       }
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-status-bar",
+        {
+          "hidden": false,
+          "style": "light"
+        }
+      ],
       "expo-secure-store",
       "./plugins/with-android-signing",
       "expo-sharing"

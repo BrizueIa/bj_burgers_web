@@ -15,6 +15,12 @@ Guía para el local y ensayo seguro de despliegue. Todas las cantidades se expre
 9. Al cierre, cuenta el efectivo, registra entradas/salidas faltantes y cierra el turno con el importe contado y una nota cuando exista diferencia.
 10. Consulta **Reportes** por fechas locales. El CSV contiene el detalle completo aunque la tabla se pagine. Las ventas se reconocen al entregar; cobros anticipados aparecen separados. Los reembolsos se reconocen en el periodo en que se efectúan.
 
+## Existencia inicial y faltantes
+
+La migración `0020_mobile_pos_operability.sql` agrega con saldo cero los 21 insumos físicos nombrados por el menú vigente. No asigna costos ni cantidades de receta supuestos: registra compras y después define las cantidades reales de cada receta desde **Recetas**. La misma migración habilita las capacidades reversibles de inventario, compras, recetas, producción, ventas, caja, pagos, gastos y reportes; mantiene apagado el corte irreversible `pos_cutover`.
+
+El saldo de inventario puede ser negativo para reflejar ventas, reservas o mermas mayores a las existencias. El valor contable del inventario nunca baja de cero: la parte disponible usa su costo promedio y el faltante usa el último costo de compra. Si aún no se conoce el costo de un insumo, la API no confirma su consumo; registra una compra o un costo inicial para que el margen no se presente como cero de forma engañosa. Una compra posterior cubre primero el saldo faltante y sólo valora las unidades que quedan disponibles.
+
 ## Activación y contingencia
 
 - Habilita capacidades desde **Activación POS**, siguiendo sus dependencias y las comprobaciones del servidor. El corte unificado sólo se permite cuando la base está preparada y no quedan comandas antiguas pendientes.
