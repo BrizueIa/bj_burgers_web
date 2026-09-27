@@ -71,19 +71,20 @@ describe.skipIf(!testDatabaseUrl)('concurrencia de ruleta con PostgreSQL', () =>
       '0021_inventory_catalog_and_negative_balances.sql',
       '0022_exact_catalog_recipes.sql',
       '0023_recipe_modifier_inventory.sql',
+      '0024_exact_menu_recipes.sql',
     ]);
     expect(await applyMigrations(database.sql, directory)).toEqual([]);
     const [mobileDefaults] = await database.sql<{ ingredients: number; cash_enabled: boolean }[]>`
       select count(*) filter(where name in (
         'Aderezo B&J','Aderezo B&J Smash','Aros de cebolla','Carne Angus','Catsup','Cebolla',
         'Cebolla caramelizada','Coca-Cola','Coca-Cola Zero','Delaware','Escuis','Fanta','Jamón',
-        'Jalapeño','Lechuga','Mayonesa','Mostaza','Pan de hamburguesa','Pan de hot dog','Papas',
+        'Jalapeño','Lechuga','Mayonesa','Mostaza','Pan brioche','Pan de hamburguesa','Pan de hot dog','Papas',
         'Piña asada','Queso americano','Queso asadero','Queso Philadelphia','Salchicha premium',
         'Salchichón','Salsa BBQ','Tomate','Tocino'
       ) and stock=0 and last_cost is null)::int as ingredients,
       (select enabled from pos_capabilities where capability='cash_sessions') as cash_enabled
       from stock_ingredients`;
-    expect(mobileDefaults).toEqual({ ingredients: 29, cash_enabled: true });
+    expect(mobileDefaults).toEqual({ ingredients: 30, cash_enabled: true });
     await database.sql`insert into categories(id,slug,name)
       values('integration-tests','integration-tests','Pruebas de integración')
       on conflict (id) do nothing`;
