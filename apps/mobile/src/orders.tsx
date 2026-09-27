@@ -1075,6 +1075,34 @@ export function OrderImport() {
   );
 }
 
+function CatalogTile({
+  name,
+  priceCents,
+  actionLabel,
+  onPress,
+}: {
+  name: string;
+  priceCents: number;
+  actionLabel: string;
+  onPress(): void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${actionLabel}: ${name}, ${money(priceCents)}`}
+      accessibilityHint="Agrega este artículo a la venta actual"
+      onPress={onPress}
+      style={({ pressed }) => [styles.productTile, pressed && styles.productTilePressed]}
+    >
+      <Text numberOfLines={2} style={styles.productTileName}>
+        {name}
+      </Text>
+      <Text style={styles.productTilePrice}>{money(priceCents)}</Text>
+      <Text style={styles.productTileAction}>＋ {actionLabel}</Text>
+    </Pressable>
+  );
+}
+
 /** POS de mostrador: arma una comanda directamente desde el catálogo. */
 export function OrderBuilder() {
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: () => api.catalog() });
@@ -1269,7 +1297,9 @@ export function OrderBuilder() {
       .filter((category) => category.id !== 'drinks')
       .sort((a, b) => a.order - b.order),
     { id: 'extras', name: 'Extras', order: 4 },
-    ...catalog.data.categories.filter((category) => category.id === 'drinks'),
+    ...catalog.data.categories
+      .filter((category) => category.id === 'drinks')
+      .map((category) => ({ ...category, name: 'Refrescos' })),
   ];
   const searchTerm = search.trim().toLocaleLowerCase('es-MX');
   const products = catalog.data.products.filter(
@@ -1390,14 +1420,13 @@ export function OrderBuilder() {
             />
           ))}
         </ScrollView>
-        <Text style={shared.label}>Catálogo · {itemCount} producto(s) en la venta</Text>
+        <Text style={shared.label}>
+          {categories.find((category) => category.id === categoryId)?.name ?? 'Catálogo'} ·{' '}
+          {categoryId === 'extras' ? extras.length : products.length} opciones
+        </Text>
       </View>
       <View style={[styles.posContent, tablet && styles.posContentTablet]}>
-        <ScrollView
-          style={[styles.catalogPane, !tablet && styles.catalogPanePhone]}
-          contentContainerStyle={styles.productGrid}
-          keyboardShouldPersistTaps="handled"
-        >
+        <View style={[styles.catalogPane, styles.productGrid]}>
           {categoryId === 'extras' ? (
             !modifierTarget ? (
               <Text style={shared.subtitle}>Agrega un producto antes de elegir extras.</Text>
@@ -1413,11 +1442,13 @@ export function OrderBuilder() {
               </Text>
             ) : extras.length ? (
               extras.map((modifier) => (
-                <Card key={modifier.id} style={styles.productCard}>
-                  <Text style={shared.text}>{modifier.name}</Text>
-                  <Text style={shared.subtitle}>{money(modifier.priceCents)}</Text>
-                  <Button label="Agregar extra" onPress={() => addModifier(modifier.id)} />
-                </Card>
+                <CatalogTile
+                  key={modifier.id}
+                  name={modifier.name}
+                  priceCents={modifier.priceCents}
+                  actionLabel="Extra"
+                  onPress={() => addModifier(modifier.id)}
+                />
               ))
             ) : (
               <Text style={shared.subtitle}>
@@ -1426,16 +1457,18 @@ export function OrderBuilder() {
             )
           ) : products.length ? (
             products.map((product) => (
-              <Card key={product.id} style={styles.productCard}>
-                <Text style={shared.text}>{product.name}</Text>
-                <Text style={shared.subtitle}>{money(product.priceCents)}</Text>
-                <Button label="Agregar" onPress={() => addProduct(product)} />
-              </Card>
+              <CatalogTile
+                key={product.id}
+                name={product.name}
+                priceCents={product.priceCents}
+                actionLabel="Agregar"
+                onPress={() => addProduct(product)}
+              />
             ))
           ) : (
             <Text style={shared.subtitle}>No hay productos disponibles en esta categoría.</Text>
           )}
-        </ScrollView>
+        </View>
         {tablet ? cartContents(true) : null}
       </View>
       {!tablet ? (
@@ -1504,13 +1537,43 @@ const styles = StyleSheet.create({
   event: { paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  productGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  productCard: { flexGrow: 1, flexBasis: 155, gap: 8 },
+  productGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignContent: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 16,
+  },
+  productTile: {
+    flexGrow: 1,
+    flexBasis: 150,
+    minHeight: 104,
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.panel,
+  },
+  productTilePressed: {
+    borderColor: colors.gold,
+    backgroundColor: colors.panelRaised,
+    transform: [{ scale: 0.98 }],
+  },
+  productTileName: {
+    minHeight: 38,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '700',
+  },
+  productTilePrice: { color: colors.gold, fontSize: 18, fontWeight: '800' },
+  productTileAction: { color: colors.green, fontSize: 13, fontWeight: '800' },
   posHeader: { paddingBottom: 10, gap: 10 },
   posContent: { flex: 1, minHeight: 0 },
   posContentTablet: { flexDirection: 'row', gap: 14, paddingHorizontal: 20, paddingBottom: 16 },
   catalogPane: { flex: 1, minHeight: 0 },
-  catalogPanePhone: { flex: 1 },
   cartPane: { flex: 1, minHeight: 0, borderTopWidth: 1, borderColor: colors.border },
   cartPaneTablet: { flex: 0.9, borderTopWidth: 0, borderLeftWidth: 1 },
   cartContent: { padding: 16, gap: 12, paddingBottom: 30 },
