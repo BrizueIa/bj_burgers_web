@@ -6,7 +6,7 @@ const ingredients = {
 };
 
 export const seedCatalog: Catalog = {
-  version: '2026-09-24.1',
+  version: '2026-09-27.1',
   categories: [
     {
       id: 'burgers',
@@ -285,8 +285,8 @@ export const seedCatalog: Catalog = {
       id: 'aros-200',
       slug: 'aros-200',
       categoryId: 'sides',
-      name: 'Aros de cebolla',
-      description: 'Aros de cebolla crujientes, orden de 200 g. Porción de 100 g disponible.',
+      name: 'Aro de cebolla',
+      description: 'Aro de cebolla crujiente, vendido por pieza.',
       priceCents: 5900,
       ingredients: ['Aros de cebolla'],
       removableIngredients: [],
@@ -299,14 +299,14 @@ export const seedCatalog: Catalog = {
       id: 'aros-100',
       slug: 'aros-100',
       categoryId: 'sides',
-      name: 'Porción de aros de cebolla',
-      description: 'Porción de aros de cebolla crujientes de 100 g.',
+      name: 'Porción de aros de cebolla (descontinuada)',
+      description: 'Presentación anterior de 100 g, ya no disponible.',
       priceCents: 2600,
       ingredients: ['Aros de cebolla'],
       removableIngredients: [],
       comboEligible: false,
       featured: false,
-      available: true,
+      available: false,
       order: 2,
     },
     {
@@ -345,7 +345,7 @@ export const seedCatalog: Catalog = {
     ),
   ],
   modifiers: [
-    { id: 'extra-papas-150', name: 'Papas 100 g', priceCents: 1600, available: true },
+    { id: 'extra-papas-150', name: 'Papas 150 g', priceCents: 1600, available: true },
     { id: 'extra-tocino', name: 'Tocino', priceCents: 1600, available: true },
     { id: 'extra-queso', name: 'Queso asadero', priceCents: 1600, available: true },
     { id: 'extra-pina', name: 'Piña asada', priceCents: 1600, available: true },

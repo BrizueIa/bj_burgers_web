@@ -1,6 +1,6 @@
 import type { Catalog } from '@bj/contracts';
 
-export type RecipeInventoryIngredient = { id: string; name: string };
+export type RecipeInventoryIngredient = { id: string; name: string; unit: 'g' | 'ml' | 'pz' };
 export type RecipeTemplateLine = RecipeInventoryIngredient & {
   kind: 'ingredient';
   suggestedQuantity?: number;
@@ -43,17 +43,65 @@ function multiplicity(name: string) {
   return 1;
 }
 
-function knownQuantity(product: Catalog['products'][number], ingredientName: string) {
-  if (product.categoryId === 'drinks') return 1;
-  if (product.id === 'papas-250' && normalize(ingredientName) === 'papas') return 250;
-  if (product.id === 'aros-200' && normalize(ingredientName) === 'aros de cebolla') return 200;
-  if (product.id === 'aros-100' && normalize(ingredientName) === 'aros de cebolla') return 100;
+function menuMultiplicity(productId: string, name: string) {
   if (
-    (product.categoryId === 'burgers' && normalize(ingredientName) === 'pan de hamburguesa') ||
-    (product.categoryId === 'dogs' && normalize(ingredientName) === 'pan de hot dog')
-  ) {
-    return 1;
-  }
+    normalize(canonicalMenuIngredient(name)) === 'aros de cebolla' &&
+    ['bbq', 'monstruosa', 'crispy-dog'].includes(productId)
+  )
+    return 2;
+  return multiplicity(name);
+}
+
+const weighedPortions: Record<string, Record<string, number>> = {
+  clasica: { 'carne angus': 150, mayonesa: 15, catsup: 10, mostaza: 5 },
+  hawaiana: { 'carne angus': 150, mayonesa: 15, catsup: 10, mostaza: 5 },
+  'bj-smash': {
+    'carne angus': 180,
+    mayonesa: 15,
+    catsup: 10,
+    mostaza: 5,
+    'aderezo b&j smash': 30,
+  },
+  salchiburger: { 'carne angus': 150, mayonesa: 15, catsup: 10, mostaza: 5 },
+  bbq: {
+    'carne angus': 150,
+    mayonesa: 15,
+    catsup: 10,
+    mostaza: 5,
+    'salsa bbq': 15,
+  },
+  monstruosa: {
+    'carne angus': 300,
+    mayonesa: 15,
+    catsup: 10,
+    mostaza: 5,
+  },
+  'dog-clasico': { mayonesa: 15, catsup: 10, mostaza: 5 },
+  'bacon-dog': { mayonesa: 15, catsup: 10, mostaza: 5 },
+  'salchi-dog': { mayonesa: 15, catsup: 10, mostaza: 5 },
+  'crispy-dog': { 'salsa bbq': 15 },
+  'bj-dog': { 'salsa bbq': 15 },
+  'mix-dog': { mayonesa: 15, catsup: 10, mostaza: 5 },
+  'jalapeno-cremoso': { 'queso philadelphia': 25 },
+};
+
+function knownQuantity(
+  product: Catalog['products'][number],
+  ingredientName: string,
+  unit: RecipeInventoryIngredient['unit'],
+) {
+  const weighed = weighedPortions[product.id]?.[normalize(canonicalMenuIngredient(ingredientName))];
+  if (weighed !== undefined) return weighed;
+  if (
+    unit === 'pz' &&
+    normalize(canonicalMenuIngredient(ingredientName)) === 'aros de cebolla' &&
+    ['bbq', 'monstruosa', 'crispy-dog'].includes(product.id)
+  )
+    return 2;
+  if (product.id === 'aros-200' && unit === 'pz') return 1;
+  if (product.id === 'papas-250' && normalize(ingredientName) === 'papas') return 250;
+  if (product.id === 'aros-100' && normalize(ingredientName) === 'aros de cebolla') return 100;
+  if (product.categoryId === 'drinks' || unit === 'pz') return multiplicity(ingredientName);
   return undefined;
 }
 
@@ -76,7 +124,8 @@ export function recipeTemplateForProduct(
 ) {
   const names = [...product.ingredients];
   if (product.categoryId === 'drinks' && !names.length) names.push(product.name);
-  if (product.categoryId === 'burgers') names.push('Pan de hamburguesa');
+  if (product.categoryId === 'burgers')
+    names.push(product.id === 'bj-smash' ? 'Pan brioche' : 'Pan de hamburguesa');
   if (product.categoryId === 'dogs') names.push('Pan de hot dog');
 
   const lines: RecipeTemplateLine[] = [];
@@ -91,13 +140,13 @@ export function recipeTemplateForProduct(
     }
     const existing = lines.find((line) => line.id === ingredient.id);
     if (existing) {
-      existing.multiplicity = (existing.multiplicity ?? 1) + multiplicity(name);
+      existing.multiplicity = (existing.multiplicity ?? 1) + menuMultiplicity(product.id, name);
     } else {
       lines.push({
         ...ingredient,
         kind: 'ingredient',
-        suggestedQuantity: knownQuantity(product, name),
-        multiplicity: multiplicity(name),
+        suggestedQuantity: knownQuantity(product, name, ingredient.unit),
+        multiplicity: menuMultiplicity(product.id, name),
         removable: removableIngredients.has(normalize(canonicalMenuIngredient(name))),
       });
     }
@@ -119,7 +168,12 @@ export function recipeTemplateForProduct(
       modifierId: modifier.id,
       ingredientId: ingredient.id,
       inventoryName: ingredient.name,
-      ...(modifier.id === 'extra-papas-150' ? { suggestedQuantity: 100 } : {}),
+      suggestedQuantity:
+        modifier.id === 'extra-papas-150' || modifier.id === 'extra-carne'
+          ? 150
+          : ingredient.unit === 'pz'
+            ? 1
+            : undefined,
       extra: true,
     });
   }

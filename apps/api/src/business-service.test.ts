@@ -125,6 +125,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       '0021_inventory_catalog_and_negative_balances.sql',
       '0022_exact_catalog_recipes.sql',
       '0023_recipe_modifier_inventory.sql',
+      '0024_exact_menu_recipes.sql',
     ]) {
       // gen_random_uuid is built into PostgreSQL; pgcrypto isn't required here.
       const migration = (
@@ -354,6 +355,182 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       delete from products where id in ('papas-250','aros-200','aros-100','coca-cola','coca-cola-zero','delaware','escuis','fanta');
       delete from categories where id in ('sides','drinks');
     `);
+  });
+
+  it('instala las recetas confirmadas con unidades coherentes y porciones exactas de aros', async () => {
+    const inventoryMigration = await readFile(
+      new URL('../migrations/0021_inventory_catalog_and_negative_balances.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(inventoryMigration);
+    await pg.exec(
+      "insert into categories(id,slug,name) values('dogs','dogs','Hot dogs'),('sides','sides','Complementos') on conflict (id) do nothing",
+    );
+    await pg.exec(`insert into products(id,slug,category_id,name,description,price_cents,combo_eligible)
+      values
+        ('clasica','clasica','burgers','Clásica','',6900,true),
+        ('hawaiana','hawaiana','burgers','Hawaiana','',8900,true),
+        ('bj-smash','bj-smash','burgers','B&J Smash','',10900,true),
+        ('salchiburger','salchiburger','burgers','Salchiburger','',8900,true),
+        ('bbq','bbq','burgers','BBQ','',9900,true),
+        ('monstruosa','monstruosa','burgers','Monstruosa','',18900,true),
+        ('dog-clasico','dog-clasico','dogs','Dog Clásico','',5900,true),
+        ('bacon-dog','bacon-dog','dogs','Bacon Dog','',6900,true),
+        ('salchi-dog','salchi-dog','dogs','Salchi Dog','',6900,true),
+        ('crispy-dog','crispy-dog','dogs','Crispy Dog','',8900,true),
+        ('bj-dog','bj-dog','dogs','B&J Dog','',8900,true),
+        ('mix-dog','mix-dog','dogs','Mix Dog','',8900,true),
+        ('aros-200','aros-200','sides','Aros de cebolla','',5900,false),
+        ('aros-100','aros-100','sides','Porción de aros','',2600,false)
+      on conflict (id) do nothing`);
+    await sql`insert into product_recipes(product_id,target_margin,overhead_cents)
+      values('aros-200',65,0) on conflict(product_id) do nothing`;
+    const [oldRingVersion] = await sql<{ id: string }[]>`
+      insert into recipe_versions(product_id,version_number,target_margin,overhead_cents,status,activated_at)
+      values('aros-200',1,65,0,'active',now()) returning id`;
+    const [oldRingIngredient] = await sql<{ id: string }[]>`
+      select id from stock_ingredients where name='Aros de cebolla'`;
+    await sql`insert into recipe_version_components(
+      recipe_version_id,component_kind,ingredient_id,quantity
+    ) values(${oldRingVersion!.id},'ingredient',${oldRingIngredient!.id},200)`;
+    await sql`insert into recipe_lines(product_id,ingredient_id,quantity)
+      values('aros-200',${oldRingIngredient!.id},200)`;
+    const menuMigration = await readFile(
+      new URL('../migrations/0024_exact_menu_recipes.sql', import.meta.url),
+      'utf8',
+    );
+    await pg.exec(menuMigration);
+    await pg.exec(menuMigration);
+
+    const ingredients = await sql<{ name: string; unit: string }[]>`
+      select name,unit from stock_ingredients where name in ('Mayonesa','Queso americano','Pan brioche') order by name`;
+    expect(ingredients).toEqual([
+      { name: 'Mayonesa', unit: 'g' },
+      { name: 'Pan brioche', unit: 'pz' },
+      { name: 'Queso americano', unit: 'pz' },
+    ]);
+    expect(
+      await sql<
+        { unit: string }[]
+      >`select unit from stock_ingredients where name='Aros de cebolla'`,
+    ).toEqual([{ unit: 'pz' }]);
+    const classicLines = await sql<{ name: string; quantity: string }[]>`
+      select ingredient.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='clasica' and version.status='active'
+      order by ingredient.name`;
+    expect(classicLines).toEqual(
+      expect.arrayContaining([
+        { name: 'Carne Angus', quantity: '150.000' },
+        { name: 'Mayonesa', quantity: '15.000' },
+        { name: 'Queso americano', quantity: '1.000' },
+      ]),
+    );
+    const ringRecipes = await sql<{ product_id: string; quantity: string }[]>`
+      select version.product_id,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id in ('bbq','monstruosa','crispy-dog')
+        and version.status='active' and ingredient.name='Aros de cebolla'
+      order by version.product_id`;
+    expect(ringRecipes).toEqual([
+      { product_id: 'bbq', quantity: '2.000' },
+      { product_id: 'crispy-dog', quantity: '2.000' },
+      { product_id: 'monstruosa', quantity: '2.000' },
+    ]);
+    const ringSide = await sql<{ name: string; quantity: string }[]>`
+      select product.name,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      join products product on product.id=version.product_id
+      where version.product_id='aros-200' and version.status='active'
+        and ingredient.name='Aros de cebolla'`;
+    expect(ringSide).toEqual([{ name: 'Aro de cebolla', quantity: '1.000' }]);
+    const ringHistory = await sql<{ version_number: number; status: string; quantity: string }[]>`
+      select version.version_number,version.status,component.quantity::text
+      from recipe_versions version
+      join recipe_version_components component on component.recipe_version_id=version.id
+      join stock_ingredients ingredient on ingredient.id=component.ingredient_id
+      where version.product_id='aros-200' and ingredient.name='Aros de cebolla'
+      order by version.version_number`;
+    expect(ringHistory).toEqual([
+      { version_number: 1, status: 'retired', quantity: '200.000' },
+      { version_number: 2, status: 'active', quantity: '1.000' },
+    ]);
+    const oldRingSide = await sql<{ available: boolean; name: string }[]>`
+      select available,name from products where id='aros-100'`;
+    expect(oldRingSide).toEqual([
+      { available: false, name: 'Porción de aros de cebolla (descontinuada)' },
+    ]);
+    await sql`delete from recipe_versions where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+    ]})`;
+    await sql`delete from recipe_lines where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+    ]})`;
+    await sql`delete from product_recipes where product_id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+    ]})`;
+    await sql`delete from products where id = any(${[
+      'clasica',
+      'hawaiana',
+      'bj-smash',
+      'salchiburger',
+      'bbq',
+      'monstruosa',
+      'dog-clasico',
+      'bacon-dog',
+      'salchi-dog',
+      'crispy-dog',
+      'bj-dog',
+      'mix-dog',
+      'aros-200',
+      'aros-100',
+    ]})`;
+    await sql`delete from categories where id in ('dogs','sides')`;
   });
 
   it('reserva una comanda unificada una sola vez y clasifica su consumo cancelado como merma', async () => {
@@ -1560,7 +1737,7 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       tocinoIngredient,
     ]);
     await pg.query(
-      "insert into modifiers(id,group_id,name,price_cents) values('extra-tocino','extras','Tocino',1600)",
+      "insert into modifiers(id,group_id,name,price_cents) values('extra-tocino','extras','Tocino',1600) on conflict (id) do update set name=excluded.name",
     );
     await purchase(1000, 10000);
     await recordEntry(
@@ -1658,5 +1835,121 @@ describe('circuito de negocio con PostgreSQL embebido', () => {
       ]),
     );
     expect((await state()).products[0]?.cost_cents).toBe(1500);
+  });
+
+  it('reserva los 100 g de papas y la bebida del combo junto con la receta principal', async () => {
+    const actor = { kind: 'device' as const, deviceId: device, origin: 'android' as const };
+    const potatoesId = randomUUID();
+    const drinkId = randomUUID();
+    await sql`insert into stock_ingredients(id,name,unit) values
+      (${potatoesId},'Papas','g'),(${drinkId},'Coca-Cola','pz')`;
+    await pg.exec(
+      "insert into categories(id,slug,name) values('drinks','drinks','Bebidas') on conflict (id) do nothing",
+    );
+    await pg.exec(
+      "insert into products(id,slug,category_id,name,description,price_cents) values('coca-cola','coca-cola','drinks','Coca-Cola','',3600) on conflict (id) do nothing",
+    );
+    await pg.exec("update products set combo_eligible=true where id='burger'");
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'burger',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: ingredient,
+            quantity: '150',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    await createRecipeVersion(
+      sql,
+      {
+        idempotencyKey: randomUUID(),
+        productId: 'coca-cola',
+        targetMargin: 60,
+        overheadCents: 0,
+        components: [
+          {
+            kind: 'ingredient',
+            ingredientId: drinkId,
+            quantity: '1',
+            removable: false,
+            extra: false,
+          },
+        ],
+      },
+      actor,
+    );
+    const catalog = {
+      ...seedCatalog,
+      products: [
+        {
+          ...seedCatalog.products[0]!,
+          id: 'burger',
+          slug: 'burger',
+          categoryId: 'burgers',
+          name: 'Burger',
+          priceCents: 10000,
+          available: true,
+        },
+        seedCatalog.products.find((product) => product.id === 'coca-cola')!,
+      ],
+      modifiers: [],
+      promotions: [],
+    };
+    const created = await createUnifiedOrder(
+      sql,
+      catalog,
+      {
+        idempotencyKey: randomUUID(),
+        fulfillment: 'counter',
+        customerName: '',
+        neighborhood: '',
+        streetAndNumber: '',
+        manualDiscountCents: 0,
+        manualDiscountReason: '',
+        quotedTotalCents: 14600,
+        items: [
+          {
+            productId: 'burger',
+            quantity: 1,
+            removedIngredients: [],
+            modifierIds: [],
+            combo: true,
+            drinkProductId: 'coca-cola',
+            note: '',
+          },
+        ],
+      },
+      device,
+      new InMemoryOrderNotifier(),
+    );
+    const reservations = await sql<{ ingredient_id: string; quantity: string }[]>`
+      select reservation.ingredient_id,reservation.quantity::text
+      from order_stock_reservations link
+      join stock_reservations reservation on reservation.id=link.reservation_id
+      where link.order_id=${created.order.id} order by reservation.ingredient_id`;
+    expect(reservations).toEqual(
+      expect.arrayContaining([
+        { ingredient_id: ingredient, quantity: '150.000' },
+        { ingredient_id: potatoesId, quantity: '100.000' },
+        { ingredient_id: drinkId, quantity: '1.000' },
+      ]),
+    );
+    const [snapshot] = await sql<
+      { composition_snapshot: { combo?: boolean; quantity?: string }[] }[]
+    >`
+      select composition_snapshot from order_items where order_id=${created.order.id}`;
+    expect(snapshot?.composition_snapshot).toEqual(
+      expect.arrayContaining([expect.objectContaining({ combo: true, quantity: '100.000' })]),
+    );
   });
 });

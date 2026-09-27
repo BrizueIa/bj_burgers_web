@@ -16,6 +16,7 @@ const inventory = [
   'Mayonesa',
   'Mostaza',
   'Pan de hamburguesa',
+  'Pan brioche',
   'Pan de hot dog',
   'Papas',
   'Piña asada',
@@ -32,7 +33,25 @@ const inventory = [
   'Delaware',
   'Escuis',
   'Fanta',
-].map((name, index) => ({ id: `ingredient-${index}`, name }));
+].map((name, index) => ({
+  id: `ingredient-${index}`,
+  name,
+  unit: [
+    'Aderezo B&J',
+    'Aderezo B&J Smash',
+    'Carne Angus',
+    'Catsup',
+    'Mayonesa',
+    'Mostaza',
+    'Papas',
+    'Queso Philadelphia',
+    'Salsa BBQ',
+  ].includes(name)
+    ? ('g' as const)
+    : name === 'Aros de cebolla'
+      ? ('g' as const)
+      : ('pz' as const),
+}));
 
 describe('plantillas de receta desde el catálogo', () => {
   it('mapea todos los ingredientes de alimentos a inventario y agrega el pan correspondiente', () => {
@@ -46,7 +65,7 @@ describe('plantillas de receta desde el catálogo', () => {
       seedCatalog.products.find((product) => product.id === 'bj-smash')!,
       inventory,
     );
-    expect(smash.lines.map((line) => line.name)).toContain('Pan de hamburguesa');
+    expect(smash.lines.map((line) => line.name)).toContain('Pan brioche');
     expect(smash.lines.map((line) => line.name)).toContain('Carne Angus');
   });
 
@@ -87,6 +106,24 @@ describe('plantillas de receta desde el catálogo', () => {
       name: 'Aros de cebolla',
       suggestedQuantity: 100,
     });
+    const singleRing = recipeTemplateForProduct(
+      seedCatalog.products.find((product) => product.id === 'aros-200')!,
+      inventory.map((ingredient) =>
+        ingredient.name === 'Aros de cebolla' ? { ...ingredient, unit: 'pz' as const } : ingredient,
+      ),
+    );
+    expect(singleRing.lines[0]).toMatchObject({ suggestedQuantity: 1, unit: 'pz' });
+
+    const bbqWithPieceStock = recipeTemplateForProduct(
+      seedCatalog.products.find((product) => product.id === 'bbq')!,
+      inventory.map((ingredient) =>
+        ingredient.name === 'Aros de cebolla' ? { ...ingredient, unit: 'pz' as const } : ingredient,
+      ),
+    );
+    expect(bbqWithPieceStock.lines.find((line) => line.name === 'Aros de cebolla')).toMatchObject({
+      multiplicity: 2,
+      suggestedQuantity: 2,
+    });
 
     const cola = recipeTemplateForProduct(
       seedCatalog.products.find((product) => product.id === 'coca-cola')!,
@@ -95,6 +132,24 @@ describe('plantillas de receta desde el catálogo', () => {
     expect(cola.lines).toEqual([
       expect.objectContaining({ name: 'Coca-Cola', suggestedQuantity: 1 }),
     ]);
+
+    const classic = recipeTemplateForProduct(
+      seedCatalog.products.find((product) => product.id === 'clasica')!,
+      inventory,
+    );
+    expect(classic.lines.find((line) => line.name === 'Carne Angus')?.suggestedQuantity).toBe(150);
+    expect(classic.lines.find((line) => line.name === 'Mayonesa')?.suggestedQuantity).toBe(15);
+    expect(classic.lines.find((line) => line.name === 'Catsup')?.suggestedQuantity).toBe(10);
+    expect(classic.lines.find((line) => line.name === 'Mostaza')?.suggestedQuantity).toBe(5);
+
+    const smash = recipeTemplateForProduct(
+      seedCatalog.products.find((product) => product.id === 'bj-smash')!,
+      inventory,
+    );
+    expect(smash.lines.find((line) => line.name === 'Carne Angus')?.suggestedQuantity).toBe(180);
+    expect(smash.lines.find((line) => line.name === 'Aderezo B&J Smash')?.suggestedQuantity).toBe(
+      30,
+    );
   });
 
   it('mapea los extras del POS a su insumo físico y marca los ingredientes removibles', () => {
@@ -117,7 +172,10 @@ describe('plantillas de receta desde el catálogo', () => {
     });
     expect(classic.extras.find((line) => line.modifierId === 'extra-papas-150')).toMatchObject({
       inventoryName: 'Papas',
-      suggestedQuantity: 100,
+      suggestedQuantity: 150,
     });
+    expect(
+      classic.extras.find((line) => line.modifierId === 'extra-carne')?.suggestedQuantity,
+    ).toBe(150);
   });
 });

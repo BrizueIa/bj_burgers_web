@@ -8,7 +8,7 @@ import type {
   OrderStatus,
   UnifiedOrderConfirm,
 } from '@bj/contracts';
-import { calculateCart, COMBO_PRICE_CENTS } from '@bj/contracts';
+import { calculateCart, COMBO_POTATOES_GRAMS, COMBO_PRICE_CENTS } from '@bj/contracts';
 import type { Sql } from 'postgres';
 import { decryptSecret, digestCode, encryptSecret } from './security.js';
 import { appendMovement } from './stock-ledger-service.js';
@@ -490,8 +490,18 @@ async function resolveInventoryRequirements(
       [],
       composition,
     );
-    if (item.combo && item.drinkProductId)
+    if (item.combo && item.drinkProductId) {
       await expand(item.drinkProductId, BigInt(item.quantity) * qtyScale, [], [], [], composition);
+      const potatoes = await tx<{ id: string; unit: string }[]>`
+        select id,unit from stock_ingredients where name='Papas' limit 1 for share`;
+      if (!potatoes[0] || potatoes[0].unit !== 'g')
+        throw new OrderError(409, 'El inventario de papas del combo debe configurarse en gramos.');
+      const quantity = scaledToQuantity(
+        BigInt(COMBO_POTATOES_GRAMS) * BigInt(item.quantity) * qtyScale,
+      );
+      add(potatoes[0].id, quantity, 'ingredient');
+      composition.push({ kind: 'ingredient', ingredientId: potatoes[0].id, quantity, combo: true });
+    }
     compositions.push(composition);
   }
   return {
