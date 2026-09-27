@@ -42,7 +42,6 @@ if (-not $env:NODE_ENV) {
   $env:NODE_ENV = if ($Variant -eq 'release') { 'production' } else { 'development' }
 }
 
-pnpm exec expo prebuild --platform android --no-install
 try {
   pnpm exec expo prebuild --platform android --no-install
   if ($LASTEXITCODE -ne 0) { throw 'Expo prebuild no pudo preparar el proyecto Android.' }
