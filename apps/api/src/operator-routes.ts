@@ -28,7 +28,12 @@ import {
   expenseCreateSchema,
   profitabilityReportSchema,
   reportPeriodSchema,
+  orderSchema,
+  orderResponseSchema,
+  ordersResponseSchema,
+  unifiedOrderQuoteResponseSchema,
 } from '@bj/contracts';
+import { apiResponse } from './api-response.js';
 import type { AppConfig } from './config.js';
 import type { Database } from './db/client.js';
 import {
@@ -52,7 +57,7 @@ import {
   recordEntry,
   saveRecipe,
 } from './business-service.js';
-import { getCapabilities, requireCapability } from './pos-foundation-service.js';
+import { getCapabilities, requireCapability, runIdempotent } from './pos-foundation-service.js';
 import {
   countStock,
   releaseStockReservation,
@@ -63,6 +68,9 @@ import {
 import { createPurchase } from './purchasing-service.js';
 import { createRecipeVersion, recipeVersionState } from './recipe-version-service.js';
 import { createProductionBatch } from './production-service.js';
+
+type IdempotentJson =
+  null | boolean | number | string | IdempotentJson[] | { [key: string]: IdempotentJson };
 import { issueOrderTicket } from './ticket-service.js';
 import { createOperatingExpense } from './expense-service.js';
 import { profitabilityReport } from './profitability-service.js';
@@ -131,16 +139,40 @@ export async function registerOperator(
     return businessState(database.sql, query.from, query.to);
   });
   app.post('/api/v1/operator/business/ingredients', async (request, reply) => {
-    if (!(await protectOperator(request, reply, database, config))) return;
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
     const input = ingredientSchema.parse(request.body);
-    const rows =
-      await database.sql`insert into stock_ingredients(name,unit,minimum) values(${input.name},${input.unit},${input.minimum}) on conflict(name) do nothing returning *`;
-    if (!rows.length)
-      return reply.code(409).send({ message: 'Ya existe un ingrediente con ese nombre.' });
-    return reply.code(201).send({ ingredient: rows[0] });
+    if (!input.idempotencyKey) {
+      const rows =
+        await database.sql`insert into stock_ingredients(name,unit,minimum) values(${input.name},${input.unit},${input.minimum}) on conflict(name) do nothing returning *`;
+      if (!rows.length)
+        return reply.code(409).send({ message: 'Ya existe un ingrediente con ese nombre.' });
+      return reply.code(201).send({ ingredient: rows[0] });
+    }
+    const outcome = await runIdempotent(
+      database.sql,
+      {
+        idempotencyKey: input.idempotencyKey,
+        operation: 'business.ingredient.create',
+        request: { name: input.name, unit: input.unit, minimum: input.minimum },
+        actor: { kind: 'device', deviceId: context.deviceId, origin: 'android' },
+        statusCode: 201,
+      },
+      async (transaction) => {
+        const rows =
+          await transaction`insert into stock_ingredients(name,unit,minimum) values(${input.name},${input.unit},${input.minimum}) on conflict(name) do nothing returning *`;
+        if (!rows.length) throw new OrderError(409, 'Ya existe un ingrediente con ese nombre.');
+        return apiResponse(z.object({ ingredient: z.unknown() }), {
+          ingredient: rows[0],
+        }) as unknown as { ingredient: IdempotentJson };
+      },
+    );
+    const result = apiResponse(z.object({ ingredient: z.unknown() }), outcome.result);
+    return reply.code(outcome.statusCode).send({ ...result, reused: outcome.reused });
   });
   app.post('/api/v1/operator/business/recipes', async (request, reply) => {
-    if (!(await protectOperator(request, reply, database, config))) return;
+    const context = await protectOperator(request, reply, database, config);
+    if (!context) return;
     if (
       (await getCapabilities(database.sql)).some(
         (item) => item.key === 'recipe_versions' && item.enabled,
@@ -149,7 +181,11 @@ export async function registerOperator(
       return reply
         .code(409)
         .send({ message: 'Actualiza la app para guardar recetas versionadas.' });
-    return saveRecipe(database.sql, recipeSchema.parse(request.body));
+    return saveRecipe(database.sql, recipeSchema.parse(request.body), {
+      kind: 'device',
+      deviceId: context.deviceId,
+      origin: 'android',
+    });
   });
   app.post('/api/v1/operator/recipes/versions', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
@@ -247,7 +283,7 @@ export async function registerOperator(
         .code(400)
         .send({ message: 'El descuento supera el total después de promociones.' });
     const totalCents = totals.totalCents - input.manualDiscountCents;
-    return {
+    return apiResponse(unifiedOrderQuoteResponseSchema, {
       fulfillment: input.fulfillment,
       subtotalCents: totalCents,
       deliveryCents: 0,
@@ -255,7 +291,7 @@ export async function registerOperator(
       manualDiscountCents: input.manualDiscountCents,
       manualDiscountReason: input.manualDiscountReason,
       promotion: totals.promotion ?? null,
-    };
+    });
   });
   app.post('/api/v1/operator/unified-orders', async (request, reply) => {
     const context = await protectOperator(request, reply, database, config);
@@ -273,7 +309,12 @@ export async function registerOperator(
         context.deviceId,
         notifier,
       );
-      return reply.code(outcome.statusCode).send({ order: outcome.order, reused: outcome.reused });
+      return reply.code(outcome.statusCode).send(
+        apiResponse(z.object({ order: orderSchema, reused: z.boolean() }), {
+          order: outcome.order,
+          reused: outcome.reused,
+        }),
+      );
     } catch (error) {
       if (error instanceof OrderError)
         return reply.code(error.statusCode).send({ message: error.message });
@@ -566,7 +607,7 @@ export async function registerOperator(
     if (!context) return;
     const statusValue = (request.query as { status?: string }).status;
     const status = statusValue ? orderStatusSchema.parse(statusValue) : undefined;
-    return { orders: await listOrders(database.sql, status) };
+    return apiResponse(ordersResponseSchema, { orders: await listOrders(database.sql, status) });
   });
 
   app.post('/api/v1/operator/orders', async (request, reply) => {
@@ -615,10 +656,15 @@ export async function registerOperator(
           context.deviceId,
           notifier,
         );
-        return reply.code(result.statusCode).send({ order: result.order, reused: result.reused });
+        return reply.code(result.statusCode).send(
+          apiResponse(z.object({ order: orderSchema, reused: z.boolean() }), {
+            order: result.order,
+            reused: result.reused,
+          }),
+        );
       }
       const order = await createOrder(database.sql, catalog, input, context.deviceId, notifier);
-      return reply.code(201).send({ order });
+      return reply.code(201).send(apiResponse(orderResponseSchema, { order }));
     } catch (error) {
       if (error instanceof OrderError)
         return reply.code(error.statusCode).send({ message: error.message });
@@ -632,7 +678,7 @@ export async function registerOperator(
     const id = z.uuid().parse((request.params as { id: string }).id);
     const order = await getOrder(database.sql, id);
     if (!order) return reply.code(404).send({ message: 'La comanda no existe.' });
-    return { order };
+    return apiResponse(orderResponseSchema, { order });
   });
 
   app.patch('/api/v1/operator/orders/:id/status', async (request, reply) => {
@@ -655,7 +701,7 @@ export async function registerOperator(
           .send({ message: 'La actualización requiere clave idempotente. Actualiza la app.' });
     }
     try {
-      return {
+      return apiResponse(orderResponseSchema, {
         order: await updateOrderStatus(
           database.sql,
           id,
@@ -665,7 +711,7 @@ export async function registerOperator(
           notifier,
           input.idempotencyKey,
         ),
-      };
+      });
     } catch (error) {
       if (error instanceof OrderError)
         return reply.code(error.statusCode).send({ message: error.message });

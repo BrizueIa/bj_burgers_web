@@ -446,7 +446,12 @@ export function BusinessEditor({ mode, productId }: { mode: BusinessMode; produc
         setMessage('Escribe el nombre del ingrediente.');
         return;
       }
-      return { name: description.trim(), unit, minimum: Number(minimum.replace(',', '.')) || 0 };
+      return {
+        name: description.trim(),
+        unit,
+        minimum: Number(minimum.replace(',', '.')) || 0,
+        idempotencyKey: createIdempotencyKey(),
+      };
     }
     if (mode === 'recipe') {
       if (!product || !lines.length) {

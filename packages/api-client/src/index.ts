@@ -2,10 +2,14 @@ import {
   businessStateResponseSchema,
   capabilitiesResponseSchema,
   catalogSchema,
+  cashSessionCloseResponseSchema,
+  counterCheckoutResponseSchema,
+  expenseCreateResponseSchema,
   operatorDeviceActivationResponseSchema,
   orderDraftSchema,
   orderResponseSchema,
-  orderSchema,
+  orderPaymentResultSchema,
+  orderRefundResponseSchema,
   ordersResponseSchema,
   spinCodeIssueResponseSchema,
   stockLedgerStateSchema,
@@ -39,6 +43,8 @@ import {
   type OrderPaymentCreate,
   type OrderRefundCreate,
   orderTicketResponseSchema,
+  purchaseCreateResponseSchema,
+  purchaseReversalResponseSchema,
   type TicketIssue,
   type ExpenseCreate,
   profitabilityReportSchema,
@@ -52,11 +58,24 @@ export interface CredentialStore {
   clearCredential(): Promise<void>;
 }
 
+export interface PendingOperationStore {
+  prepare(input: { path: string; fingerprint: string; idempotencyKey: string }): Promise<string>;
+  complete(path: string, idempotencyKey: string): Promise<void>;
+}
+
 export class BjApiError extends Error {
   constructor(
     message: string,
     public readonly statusCode?: number,
     public readonly cause?: unknown,
+    public readonly metadata: {
+      category?: BjApiErrorCategory | undefined;
+      method?: string | undefined;
+      path?: string | undefined;
+      requestId?: string | undefined;
+      retryAfterMs?: number | undefined;
+      details?: unknown;
+    } = {},
   ) {
     super(message);
     this.name = 'BjApiError';
@@ -67,8 +86,53 @@ export class BjApiError extends Error {
   }
 
   get ambiguous() {
-    return this.statusCode === undefined || this.statusCode >= 500;
+    return (
+      this.metadata.category === 'timeout' ||
+      this.metadata.category === 'network' ||
+      this.metadata.category === 'invalid_response' ||
+      this.statusCode === undefined ||
+      this.statusCode >= 500
+    );
   }
+
+  get retryable() {
+    return (
+      this.metadata.category === 'network' ||
+      this.metadata.category === 'timeout' ||
+      this.statusCode === 408 ||
+      this.statusCode === 429 ||
+      (this.statusCode ?? 0) >= 500
+    );
+  }
+
+  get category(): BjApiErrorCategory {
+    return this.metadata.category ?? categoryForStatus(this.statusCode);
+  }
+
+  get requestId() {
+    return this.metadata.requestId;
+  }
+}
+
+export type BjApiErrorCategory =
+  | 'network'
+  | 'timeout'
+  | 'cancelled'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'conflict'
+  | 'rate_limited'
+  | 'server'
+  | 'invalid_response'
+  | 'http';
+
+function categoryForStatus(status?: number): BjApiErrorCategory {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 409) return 'conflict';
+  if (status === 429) return 'rate_limited';
+  if (status && status >= 500) return 'server';
+  return 'http';
 }
 
 export interface BjApiClientOptions {
@@ -76,14 +140,28 @@ export interface BjApiClientOptions {
   credentialStore: CredentialStore;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  pendingOperations?: PendingOperationStore;
 }
 
 type RequestInitWithTimeout = RequestInit & { timeoutMs?: number };
 
-const errorBodySchema = z.object({ message: z.string() }).partial();
+const errorBodySchema = z.object({
+  code: z.string().optional(),
+  message: z.string().optional(),
+  requestId: z.string().optional(),
+  details: z.unknown().optional(),
+});
 
 function trimBaseUrl(value: string) {
   return value.replace(/\/$/, '');
+}
+
+function parseRetryAfter(value: string | null) {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
 export function createIdempotencyKey() {
@@ -125,51 +203,153 @@ export class BjApiClient {
     protectedRoute = true,
   ): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);
+    let didTimeout = false;
+    const abortFromCaller = () => controller.abort();
+    if (init.signal?.aborted) abortFromCaller();
+    else init.signal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timeout = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, init.timeoutMs ?? this.timeoutMs);
+    const method = init.method ?? 'GET';
+    const pathOnly = path.split('?')[0]!;
     try {
+      const headers = await this.headers(protectedRoute);
       const response = await this.requestFetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers: { ...(await this.headers(protectedRoute)), ...init.headers },
-        signal: init.signal ?? controller.signal,
+        headers: { ...headers, ...init.headers },
+        signal: controller.signal,
       });
-      const raw = response.status === 204 ? {} : await response.json().catch(() => null);
+      const requestId = response.headers.get('x-request-id') ?? undefined;
+      let raw: unknown = {};
+      if (response.status !== 204) {
+        try {
+          raw = await response.json();
+        } catch (cause) {
+          throw new BjApiError(
+            `El servidor devolvió una respuesta ilegible.${requestId ? ` Referencia: ${requestId}.` : ''}`,
+            response.status,
+            cause,
+            {
+              category: 'invalid_response',
+              method,
+              path: pathOnly,
+              requestId,
+            },
+          );
+        }
+      }
       if (!response.ok) {
         const body = errorBodySchema.safeParse(raw);
         if (response.status === 401) await this.options.credentialStore.clearCredential();
         throw new BjApiError(
           body.success && body.data.message
-            ? body.data.message
+            ? `${body.data.message}${response.status >= 500 && (body.data.requestId ?? requestId) ? ` Referencia: ${body.data.requestId ?? requestId}.` : ''}`
             : 'No fue posible completar la operación.',
           response.status,
+          undefined,
+          {
+            category: categoryForStatus(response.status),
+            method,
+            path: pathOnly,
+            requestId: body.success ? (body.data.requestId ?? requestId) : requestId,
+            retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
+            details: body.success ? body.data.details : undefined,
+          },
         );
       }
       const parsed = schema.safeParse(raw);
       if (!parsed.success)
-        throw new BjApiError('La respuesta del servidor no tiene el formato esperado.');
+        throw new BjApiError(
+          `El servidor devolvió datos incompatibles con la app.${requestId ? ` Referencia: ${requestId}.` : ''}`,
+          undefined,
+          parsed.error,
+          {
+            category: 'invalid_response',
+            method,
+            path: pathOnly,
+            requestId,
+            details: parsed.error.issues.map((issue) => ({
+              path: issue.path.join('.'),
+              code: issue.code,
+            })),
+          },
+        );
       return parsed.data;
     } catch (error) {
       if (error instanceof BjApiError) throw error;
-      const message =
-        error instanceof Error && error.name === 'AbortError'
+      const timedOut = didTimeout;
+      const cancelled =
+        !timedOut &&
+        (init.signal?.aborted || (error instanceof Error && error.name === 'AbortError'));
+      throw new BjApiError(
+        timedOut
           ? 'La operación tardó demasiado.'
-          : 'No hay conexión con el servidor.';
-      throw new BjApiError(message, undefined, error);
+          : cancelled
+            ? 'La operación fue cancelada.'
+            : 'No hay conexión con el servidor.',
+        undefined,
+        error,
+        {
+          category: timedOut ? 'timeout' : cancelled ? 'cancelled' : 'network',
+          method,
+          path: pathOnly,
+        },
+      );
     } finally {
       clearTimeout(timeout);
+      init.signal?.removeEventListener('abort', abortFromCaller);
     }
   }
 
-  private post<T>(path: string, schema: ZodType<T>, body: unknown, protectedRoute = true) {
-    return this.request(
-      path,
-      schema,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      },
-      protectedRoute,
-    );
+  private post<T>(
+    path: string,
+    schema: ZodType<T>,
+    body: unknown,
+    protectedRoute = true,
+    method = 'POST',
+  ) {
+    return (async () => {
+      const record =
+        body && typeof body === 'object' && !Array.isArray(body)
+          ? (body as Record<string, unknown>)
+          : undefined;
+      const idempotencyKey =
+        typeof record?.idempotencyKey === 'string' ? record.idempotencyKey : undefined;
+      const operationPath = path.split('?')[0]!;
+      const fingerprint = record
+        ? JSON.stringify(
+            Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'idempotencyKey')),
+          )
+        : JSON.stringify(body);
+      const key =
+        idempotencyKey && this.options.pendingOperations
+          ? await this.options.pendingOperations.prepare({
+              path: operationPath,
+              fingerprint,
+              idempotencyKey,
+            })
+          : idempotencyKey;
+      const requestBody = key && record ? { ...record, idempotencyKey: key } : body;
+      try {
+        const result = await this.request(
+          path,
+          schema,
+          {
+            method,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(requestBody),
+          },
+          protectedRoute,
+        );
+        if (key) await this.options.pendingOperations?.complete(operationPath, key);
+        return result;
+      } catch (error) {
+        if (key && error instanceof BjApiError && !error.ambiguous)
+          await this.options.pendingOperations?.complete(operationPath, key);
+        throw error;
+      }
+    })();
   }
 
   async activateDevice(deviceId: string, pairingCode: string) {
@@ -221,48 +401,29 @@ export class BjApiClient {
   }
 
   updateOrderStatus(id: string, status: OrderStatus, note = '', idempotencyKey?: string) {
-    return this.request(`/operator/orders/${id}/status`, orderResponseSchema, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status, note, ...(idempotencyKey ? { idempotencyKey } : {}) }),
-    }).then((result) => result.order);
+    return this.post(
+      `/operator/orders/${id}/status`,
+      orderResponseSchema,
+      { status, note, idempotencyKey: idempotencyKey ?? createIdempotencyKey() },
+      true,
+      'PATCH',
+    ).then((result) => result.order);
   }
 
   collectOrderPayment(id: string, input: OrderPaymentCreate) {
-    return this.post(
-      '/operator/orders/' + id + '/payments',
-      z.object({
-        orderId: z.string().uuid(),
-        appliedCents: z.number().int(),
-        changeCents: z.number().int(),
-        balanceCents: z.number().int(),
-      }),
-      input,
-    );
+    return this.post('/operator/orders/' + id + '/payments', orderPaymentResultSchema, input);
   }
 
   checkoutCounterOrder(id: string, input: OrderPaymentCreate) {
     return this.post(
       `/operator/orders/${id}/counter-checkout`,
-      z.object({
-        order: orderSchema,
-        changeCents: z.number().int().nonnegative(),
-        reused: z.boolean(),
-      }),
+      counterCheckoutResponseSchema,
       input,
     );
   }
 
   refundOrderPayment(id: string, input: OrderRefundCreate) {
-    return this.post(
-      '/operator/orders/' + id + '/refunds',
-      z.object({
-        orderId: z.string().uuid(),
-        refundedCents: z.number().int(),
-        method: z.enum(['cash', 'card', 'transfer']),
-      }),
-      input,
-    );
+    return this.post('/operator/orders/' + id + '/refunds', orderRefundResponseSchema, input);
   }
 
   issueOrderTicket(id: string, input: TicketIssue) {
@@ -270,22 +431,7 @@ export class BjApiClient {
   }
 
   createExpense(input: ExpenseCreate) {
-    return this.post(
-      '/operator/expenses',
-      z.object({
-        id: z.string().uuid(),
-        category: z.string(),
-        description: z.string(),
-        amountCents: z.number().int().positive(),
-        paymentMethod: z.enum(['cash', 'card', 'transfer']),
-        fundsOrigin: z.enum(['cash_session', 'external']),
-        cashSessionId: z.string().uuid().nullable(),
-        paymentId: z.string().uuid().nullable(),
-        occurredAt: z.string().datetime({ offset: true }),
-        reused: z.boolean(),
-      }),
-      input,
-    );
+    return this.post('/operator/expenses', expenseCreateResponseSchema, input);
   }
 
   profitabilityReport(from: string, to: string, page = 1): Promise<ProfitabilityReport> {
@@ -304,7 +450,12 @@ export class BjApiClient {
     return this.request(`/operator/business?${params}`, businessStateResponseSchema);
   }
 
-  addIngredient(input: { name: string; unit: 'g' | 'ml' | 'pz'; minimum: number }) {
+  addIngredient(input: {
+    name: string;
+    unit: 'g' | 'ml' | 'pz';
+    minimum: number;
+    idempotencyKey?: string;
+  }) {
     return this.post(
       '/operator/business/ingredients',
       z.object({ ingredient: z.unknown() }),
@@ -318,6 +469,7 @@ export class BjApiClient {
     overheadCents: number;
     priceCents: number;
     lines: Array<{ ingredientId: string; quantity: number }>;
+    idempotencyKey?: string;
   }) {
     return this.post('/operator/business/recipes', z.object({ saved: z.literal(true) }), input);
   }
@@ -358,16 +510,7 @@ export class BjApiClient {
   }
 
   closeCashSession(input: CashSessionClose) {
-    return this.post(
-      '/operator/cash-session/close',
-      z.object({
-        id: z.string().uuid(),
-        expectedCents: z.number().int(),
-        countedCents: z.number().int(),
-        differenceCents: z.number().int(),
-      }),
-      input,
-    );
+    return this.post('/operator/cash-session/close', cashSessionCloseResponseSchema, input);
   }
 
   recordBusinessEntry(input: Record<string, unknown>) {
@@ -405,27 +548,13 @@ export class BjApiClient {
   }
 
   createPurchase(input: PurchaseCreate) {
-    return this.post(
-      '/operator/purchasing/purchases',
-      z.object({
-        purchaseId: z.string().uuid(),
-        totalCents: z.number().int(),
-        lines: z.array(z.unknown()),
-        reused: z.boolean(),
-      }),
-      input,
-    );
+    return this.post('/operator/purchasing/purchases', purchaseCreateResponseSchema, input);
   }
 
   reversePurchase(purchaseId: string, input: { idempotencyKey: string; reason: string }) {
     return this.post(
       `/operator/purchasing/purchases/${purchaseId}/reverse`,
-      z.object({
-        purchaseId: z.string().uuid(),
-        reversalId: z.string().uuid(),
-        status: z.literal('reversed'),
-        reused: z.boolean(),
-      }),
+      purchaseReversalResponseSchema,
       input,
     );
   }

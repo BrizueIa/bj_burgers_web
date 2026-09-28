@@ -47,4 +47,16 @@ export const purchaseReversalSchema = z.object({
   idempotencyKey: z.uuid(),
   reason: z.string().trim().min(3).max(300),
 });
+export const purchaseCreateResponseSchema = z.object({
+  purchaseId: z.uuid(),
+  totalCents: z.number().int(),
+  lines: z.array(z.unknown()),
+  reused: z.boolean(),
+});
+export const purchaseReversalResponseSchema = z.object({
+  purchaseId: z.uuid(),
+  reversalId: z.uuid(),
+  status: z.literal('reversed'),
+  reused: z.boolean(),
+});
 export type PurchaseCreate = z.infer<typeof purchaseCreateSchema>;

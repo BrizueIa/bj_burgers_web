@@ -87,6 +87,69 @@ describe('BjApiClient', () => {
     );
   });
 
+  it('reports the precise incompatible response path and request id', async () => {
+    const client = new BjApiClient({
+      baseUrl: 'https://api.example/api/v1',
+      credentialStore: store,
+      fetch: (async () =>
+        new Response(JSON.stringify({ orders: [{ id: 'bad-order' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json', 'x-request-id': 'req-123' },
+        })) as typeof globalThis.fetch,
+    });
+    await expect(client.orders()).rejects.toMatchObject({
+      category: 'invalid_response',
+      requestId: 'req-123',
+      metadata: {
+        details: expect.arrayContaining([expect.objectContaining({ path: 'orders.0.id' })]),
+      },
+    });
+  });
+
+  it('reuses a persisted idempotency key and clears it after a valid response', async () => {
+    const pendingOperations = {
+      prepare: vi.fn(async () => 'saved-idempotency-key'),
+      complete: vi.fn(async () => undefined),
+    };
+    const request = vi.fn(async (...args: Parameters<typeof globalThis.fetch>) => {
+      void args;
+      return json({ code: 'ABCD', expiresAt: null, reused: true });
+    });
+    const client = new BjApiClient({
+      baseUrl: 'https://api.example/api/v1',
+      credentialStore: store,
+      pendingOperations,
+      fetch: request as typeof globalThis.fetch,
+    });
+    await client.issueSpinCode('4efbd774-a99b-43a0-a7c7-34d43c1cd800', 'new-key');
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body)).idempotencyKey).toBe(
+      'saved-idempotency-key',
+    );
+    expect(pendingOperations.prepare).toHaveBeenCalledOnce();
+    expect(pendingOperations.complete).toHaveBeenCalledWith(
+      '/operator/orders/4efbd774-a99b-43a0-a7c7-34d43c1cd800/spin-code',
+      'saved-idempotency-key',
+    );
+  });
+
+  it('distinguishes an unreadable server response from a network failure', async () => {
+    const client = new BjApiClient({
+      baseUrl: 'https://api.example/api/v1',
+      credentialStore: store,
+      fetch: (async () =>
+        new Response('<html>Unavailable</html>', {
+          status: 503,
+          headers: { 'content-type': 'text/html' },
+        })) as typeof globalThis.fetch,
+    });
+    await expect(client.orders()).rejects.toMatchObject({
+      category: 'invalid_response',
+      statusCode: 503,
+      ambiguous: true,
+      retryable: true,
+    });
+  });
+
   it('uses the server capability list before exposing a staged POS circuit', async () => {
     const client = new BjApiClient({
       baseUrl: 'https://api.example/api/v1',

@@ -12,6 +12,7 @@ import { createDemoSpin, lookupSpinResult, redeemSpin, SpinError } from './spin-
 import { InMemoryOrderNotifier } from './order-service.js';
 import { registerOperator } from './operator-routes.js';
 import { getCapabilities } from './pos-foundation-service.js';
+import { ApiResponseError } from './api-response.js';
 
 export async function buildApp(env = process.env) {
   const config = loadConfig(env);
@@ -49,6 +50,30 @@ export async function buildApp(env = process.env) {
     },
   });
   await app.register(rateLimit, { global: true, max: 180, timeWindow: '1 minute' });
+  app.addHook('onSend', (request, reply, payload, done) => {
+    reply.header('x-request-id', request.id);
+    if (reply.statusCode < 400 || typeof payload !== 'string') return done(null, payload);
+    try {
+      const body = JSON.parse(payload) as Record<string, unknown>;
+      const code =
+        typeof body.code === 'string'
+          ? body.code
+          : reply.statusCode === 401
+            ? 'unauthorized'
+            : reply.statusCode === 403
+              ? 'forbidden'
+              : reply.statusCode === 409
+                ? 'conflict'
+                : reply.statusCode === 429
+                  ? 'rate_limited'
+                  : reply.statusCode >= 500
+                    ? 'server_error'
+                    : 'request_error';
+      return done(null, JSON.stringify({ ...body, code, requestId: request.id }));
+    } catch {
+      return done(null, payload);
+    }
+  });
 
   app.get('/health', async () => {
     await database.sql`select 1`;
@@ -143,16 +168,25 @@ export async function buildApp(env = process.env) {
   await registerAdmin(app, database, config, orderNotifier);
   await registerOperator(app, database, config, orderNotifier);
   app.setErrorHandler((error, _request, reply) => {
-    const handled = error as Error & { statusCode?: number };
+    const handled = error as Error & { statusCode?: number; name: string };
+    if (handled instanceof ApiResponseError)
+      return reply.code(500).send({
+        code: 'invalid_server_response',
+        message: 'El servidor generó una respuesta incompatible.',
+        details: handled.details,
+      });
     if (handled.name === 'ZodError')
-      return reply
-        .code(400)
-        .send({ message: 'Los datos enviados no son válidos.', details: handled.message });
+      return reply.code(400).send({
+        code: 'invalid_request',
+        message: 'Los datos enviados no son válidos.',
+        details: handled.message,
+      });
     app.log.error(handled);
     const statusCode = handled.statusCode && handled.statusCode < 500 ? handled.statusCode : 500;
-    return reply
-      .code(statusCode)
-      .send({ message: statusCode < 500 ? handled.message : 'Ocurrió un error inesperado.' });
+    return reply.code(statusCode).send({
+      code: statusCode >= 500 ? 'server_error' : 'request_error',
+      message: statusCode < 500 ? handled.message : 'Ocurrió un error inesperado.',
+    });
   });
   app.addHook('onClose', async () => database.sql.end());
   return app;

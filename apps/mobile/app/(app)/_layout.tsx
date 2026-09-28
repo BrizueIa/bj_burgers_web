@@ -5,6 +5,7 @@ import { Button, Loading, Screen } from '@/src/ui';
 import { colors, shared } from '@/src/theme';
 import { useOnline } from '@/src/hooks';
 import { useSession } from '@/src/session';
+import { PendingOperationNotice } from '@/src/pending-operation-notice';
 
 const nav = [
   ['Inicio', '/(app)/home'],
@@ -51,6 +52,7 @@ export default function AppLayout() {
           </Text>
         ) : null}
       </View>
+      <PendingOperationNotice />
       <View style={styles.root}>
         {tablet ? menu : null}
         <View style={styles.main}>
