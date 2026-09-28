@@ -8,11 +8,15 @@ import type {
   OrderStatus,
   UnifiedOrderConfirm,
 } from '@bj/contracts';
-import { calculateCart, COMBO_PRICE_CENTS } from '@bj/contracts';
+import { calculateCart, COMBO_PRICE_CENTS, orderSchema } from '@bj/contracts';
 import type { Sql } from 'postgres';
 import { decryptSecret, digestCode, encryptSecret } from './security.js';
 import { appendMovement } from './stock-ledger-service.js';
 import { auditOperation, runIdempotent } from './pos-foundation-service.js';
+import { apiResponse } from './api-response.js';
+
+type IdempotencyJson =
+  null | boolean | number | string | IdempotencyJson[] | { [key: string]: IdempotencyJson };
 
 export class OrderError extends Error {
   constructor(
@@ -591,7 +595,7 @@ async function createOrderInTransaction(
   }
   await tx`insert into order_events (order_id, event_type, status, note, device_id, created_by_user_id)
     values (${orderId}, 'created', 'new', ${options.source === 'pos' ? 'Comanda creada desde el POS.' : 'Comanda creada desde WhatsApp.'}, ${actorIds.deviceId}, ${actorIds.userId})`;
-  return getOrder(tx, orderId);
+  return apiResponse(orderSchema, await getOrder(tx, orderId));
 }
 
 export async function createOrder(
@@ -602,17 +606,24 @@ export async function createOrder(
   notifier: OrderNotifier,
   options?: OrderCreationOptions,
 ) {
-  const order = await sql.begin((tx) =>
-    createOrderInTransaction(
-      tx as unknown as Sql,
-      catalog,
-      input,
-      { kind: 'device', deviceId, origin: 'android' },
-      options,
-    ),
+  const actor: AuthenticatedActor = { kind: 'device', deviceId, origin: 'android' };
+  const outcome = await runIdempotent(
+    sql,
+    {
+      idempotencyKey: input.idempotencyKey,
+      operation: 'order.create.legacy',
+      request: JSON.parse(JSON.stringify(input)) as IdempotencyJson,
+      actor,
+      statusCode: 201,
+    },
+    async (transaction) => {
+      const order = await createOrderInTransaction(transaction, catalog, input, actor, options);
+      if (!order) throw new OrderError(500, 'No fue posible crear la comanda.');
+      return order as unknown as Record<string, never>;
+    },
   );
-  if (!order) throw new OrderError(500, 'No fue posible crear la comanda.');
-  notifier.publish(order.id as string);
+  const order = apiResponse(orderSchema, outcome.result);
+  if (!outcome.reused) notifier.publish(order.id);
   return order;
 }
 
@@ -814,7 +825,7 @@ export async function updateOrderStatusInTransaction(
     where id=${orderId}`;
   await tx`insert into order_events (order_id, event_type, status, note, device_id, created_by_user_id)
     values (${orderId}, 'status_changed', ${nextStatus}, ${note}, ${actorIds.deviceId}, ${actorIds.userId})`;
-  return getOrder(tx, orderId);
+  return apiResponse(orderSchema, await getOrder(tx, orderId));
 }
 
 export async function updateOrderStatus(

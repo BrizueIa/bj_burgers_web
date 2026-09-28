@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { idempotencyKeySchema, positiveMoneyCentsSchema } from './foundation.js';
+import { orderSchema } from './operator.js';
 const paymentLine = z
   .object({
     method: z.enum(['cash', 'card', 'transfer']),
@@ -22,6 +23,22 @@ export const orderRefundCreateSchema = z.object({
   orderItemId: z.uuid().optional(),
   amountCents: positiveMoneyCentsSchema,
   reason: z.string().trim().min(3).max(300),
+});
+export const orderPaymentResultSchema = z.object({
+  orderId: z.uuid(),
+  appliedCents: z.number().int(),
+  changeCents: z.number().int(),
+  balanceCents: z.number().int(),
+});
+export const counterCheckoutResponseSchema = z.object({
+  order: orderSchema,
+  changeCents: z.number().int().nonnegative(),
+  reused: z.boolean(),
+});
+export const orderRefundResponseSchema = z.object({
+  orderId: z.uuid(),
+  refundedCents: z.number().int(),
+  method: z.enum(['cash', 'card', 'transfer']),
 });
 export type OrderPaymentCreate = z.infer<typeof orderPaymentCreateSchema>;
 export type CounterCheckout = z.infer<typeof counterCheckoutSchema>;

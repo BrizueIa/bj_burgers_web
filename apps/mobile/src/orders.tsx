@@ -16,7 +16,7 @@ import type {
 } from '@bj/contracts';
 import { api } from './api';
 import { centsFromInput, money, statusLabel } from './format';
-import { useForeground } from './hooks';
+import { useForeground, useOnline } from './hooks';
 import { Button, Card, Field, Loading, Notice, Pill, ScrollScreen, SectionTitle } from './ui';
 import { colors, shared } from './theme';
 
@@ -49,8 +49,9 @@ function useOrders(filter: OrderStatus | 'all') {
 function useOrderStream(enabled: boolean) {
   const queryClient = useQueryClient();
   const foreground = useForeground();
+  const online = useOnline();
   useEffect(() => {
-    if (!enabled || !foreground) return;
+    if (!enabled || !foreground || !online) return;
     const controller = new AbortController();
     let retry = 1_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -80,7 +81,7 @@ function useOrderStream(enabled: boolean) {
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [enabled, foreground, queryClient]);
+  }, [enabled, foreground, online, queryClient]);
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -132,11 +133,22 @@ function OrdersList({
   orders,
   selectedId,
   onSelect,
+  loadError = false,
+  onRetry,
 }: {
   orders: Order[];
   selectedId?: string;
   onSelect(order: Order): void;
+  loadError?: boolean;
+  onRetry?: () => void;
 }) {
+  if (!orders.length && loadError)
+    return (
+      <View style={styles.empty}>
+        <Notice kind="error">No se pudo confirmar si hay comandas en este estado.</Notice>
+        {onRetry ? <Button label="Reintentar" onPress={onRetry} /> : null}
+      </View>
+    );
   if (!orders.length)
     return (
       <View style={styles.empty}>
@@ -164,11 +176,15 @@ function OrdersList({
 
 export function OrdersBoard() {
   const [filter, setFilter] = useState<OrderStatus | 'all'>('all');
-  const { data: orders = [], isLoading, error, refetch, isFetching } = useOrders(filter);
+  const { data: loadedOrders, isLoading, error, refetch, isFetching } = useOrders(filter);
+  const orders = error ? [] : (loadedOrders ?? []);
   const [selectedId, setSelectedId] = useState<string>();
   const { width } = useWindowDimensions();
   const tablet = width >= 760;
   useOrderStream(true);
+  useEffect(() => {
+    if (error) setSelectedId(undefined);
+  }, [error]);
   if (isLoading) return <Loading label="Cargando comandas…" />;
   return (
     <View style={shared.screen}>
@@ -215,6 +231,8 @@ export function OrdersBoard() {
                 orders={orders}
                 selectedId={selectedId}
                 onSelect={(order) => setSelectedId(order.id)}
+                loadError={Boolean(error)}
+                onRetry={() => void refetch()}
               />
             </View>
             <View style={styles.detailPane}>
@@ -233,6 +251,8 @@ export function OrdersBoard() {
             onSelect={(order) =>
               router.push({ pathname: '/(app)/orders/[id]', params: { id: order.id } })
             }
+            loadError={Boolean(error)}
+            onRetry={() => void refetch()}
           />
         )}
       </View>

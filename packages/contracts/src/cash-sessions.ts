@@ -38,6 +38,12 @@ export const cashSessionStateSchema = z.object({
     }),
   ),
 });
+export const cashSessionCloseResponseSchema = z.object({
+  id: z.uuid(),
+  expectedCents: z.number().int(),
+  countedCents: z.number().int(),
+  differenceCents: z.number().int(),
+});
 export type CashSessionOpen = z.infer<typeof cashSessionOpenSchema>;
 export type CashMovement = z.infer<typeof cashMovementSchema>;
 export type CashSessionClose = z.infer<typeof cashSessionCloseSchema>;

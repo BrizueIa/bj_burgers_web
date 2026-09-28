@@ -20,5 +20,17 @@ export const expenseCreateSchema = z
       (expense.category !== 'commission' && !expense.paymentId),
     'La comisión requiere el pago original y fondos externos; otros gastos no aceptan un pago ligado.',
   );
+export const expenseCreateResponseSchema = z.object({
+  id: z.uuid(),
+  category: z.string(),
+  description: z.string(),
+  amountCents: z.number().int().positive(),
+  paymentMethod: z.enum(['cash', 'card', 'transfer']),
+  fundsOrigin: z.enum(['cash_session', 'external']),
+  cashSessionId: z.uuid().nullable(),
+  paymentId: z.uuid().nullable(),
+  occurredAt: z.string().datetime({ offset: true }),
+  reused: z.boolean(),
+});
 
 export type ExpenseCreate = z.infer<typeof expenseCreateSchema>;

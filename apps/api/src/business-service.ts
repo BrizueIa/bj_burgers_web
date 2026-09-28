@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { Sql, JSONValue } from 'postgres';
 import { OrderError } from './order-service.js';
 import { appendMovement } from './stock-ledger-service.js';
+import { runIdempotent } from './pos-foundation-service.js';
+import type { AuthenticatedActor } from '@bj/contracts';
 
 const quantity = z.number().positive().max(1000000).multipleOf(0.001);
 const cents = z.number().int().min(0).max(100000000);
@@ -9,10 +11,12 @@ export const ingredientSchema = z.object({
   name: z.string().trim().min(1).max(120),
   unit: z.enum(['g', 'ml', 'pz']),
   minimum: z.number().min(0).max(1000000).multipleOf(0.001).default(0),
+  idempotencyKey: z.uuid().optional(),
 });
 export const recipeSchema = z
   .object({
     productId: z.string().min(1),
+    idempotencyKey: z.uuid().optional(),
     targetMargin: z.number().int().min(1).max(95),
     overheadCents: cents,
     priceCents: cents,
@@ -51,24 +55,48 @@ export const entrySchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('expense'), totalCents: cents.positive() }),
 ]);
 
-export async function saveRecipe(sql: Sql, input: z.infer<typeof recipeSchema>) {
-  return sql.begin(async (tx) => {
-    await tx`select pg_advisory_xact_lock(824612)`;
-    const products = await tx`select id from products where id=${input.productId} for update`;
-    if (!products.length) throw new OrderError(404, 'Producto inexistente.');
-    for (const line of input.lines) {
-      const found = await tx`select id from stock_ingredients where id=${line.ingredientId}`;
-      if (!found.length) throw new OrderError(400, 'Ingrediente inexistente.');
-    }
-    await tx`insert into product_recipes(product_id,target_margin,overhead_cents)
-      values(${input.productId},${input.targetMargin},${input.overheadCents})
-      on conflict(product_id) do update set target_margin=excluded.target_margin, overhead_cents=excluded.overhead_cents`;
-    await tx`delete from recipe_lines where product_id=${input.productId}`;
-    for (const line of input.lines)
-      await tx`insert into recipe_lines values(${input.productId},${line.ingredientId},${line.quantity})`;
-    await tx`update products set price_cents=${input.priceCents},updated_at=now() where id=${input.productId}`;
-    return { saved: true };
-  });
+async function saveRecipeInTransaction(tx: Sql, input: z.infer<typeof recipeSchema>) {
+  await tx`select pg_advisory_xact_lock(824612)`;
+  const products = await tx`select id from products where id=${input.productId} for update`;
+  if (!products.length) throw new OrderError(404, 'Producto inexistente.');
+  for (const line of input.lines) {
+    const found = await tx`select id from stock_ingredients where id=${line.ingredientId}`;
+    if (!found.length) throw new OrderError(400, 'Ingrediente inexistente.');
+  }
+  await tx`insert into product_recipes(product_id,target_margin,overhead_cents)
+    values(${input.productId},${input.targetMargin},${input.overheadCents})
+    on conflict(product_id) do update set target_margin=excluded.target_margin, overhead_cents=excluded.overhead_cents`;
+  await tx`delete from recipe_lines where product_id=${input.productId}`;
+  for (const line of input.lines)
+    await tx`insert into recipe_lines values(${input.productId},${line.ingredientId},${line.quantity})`;
+  await tx`update products set price_cents=${input.priceCents},updated_at=now() where id=${input.productId}`;
+  return { saved: true as const };
+}
+
+export async function saveRecipe(
+  sql: Sql,
+  input: z.infer<typeof recipeSchema>,
+  actor?: AuthenticatedActor,
+) {
+  if (!actor || !input.idempotencyKey)
+    return sql.begin((tx) => saveRecipeInTransaction(tx as unknown as Sql, input));
+  const outcome = await runIdempotent(
+    sql,
+    {
+      idempotencyKey: input.idempotencyKey,
+      operation: 'business.recipe.save',
+      request: {
+        productId: input.productId,
+        targetMargin: input.targetMargin,
+        overheadCents: input.overheadCents,
+        priceCents: input.priceCents,
+        lines: input.lines,
+      },
+      actor,
+    },
+    (tx) => saveRecipeInTransaction(tx, input),
+  );
+  return outcome.result;
 }
 
 export async function recordEntry(sql: Sql, input: z.infer<typeof entrySchema>, deviceId: string) {
